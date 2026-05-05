@@ -7,9 +7,1026 @@
 #include <manager/BfresRendererMgr.h>
 #include <manager/MergedActorMgr.h>
 #include <game/actor_component/ActorComponentModelInfo.h>
+#include <file/game/zstd/ZStdBackend.h>
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <cmath>
+#include <filesystem>
+#include <limits>
+#include <cstring>
 
 namespace application::game
 {
+	namespace
+	{
+		std::string ToLowerCopy(const std::string& Value)
+		{
+			std::string Lower = Value;
+			std::transform(Lower.begin(), Lower.end(), Lower.begin(), [](unsigned char C)
+				{
+					return static_cast<char>(std::tolower(C));
+				});
+			return Lower;
+		}
+
+		std::string TrimAsciiCopy(const std::string& Value)
+		{
+			if (Value.empty())
+			{
+				return Value;
+			}
+
+			size_t Start = 0;
+			while (Start < Value.size() && std::isspace(static_cast<unsigned char>(Value[Start])) != 0)
+			{
+				Start++;
+			}
+
+			if (Start == Value.size())
+			{
+				return "";
+			}
+
+			size_t End = Value.size();
+			while (End > Start && std::isspace(static_cast<unsigned char>(Value[End - 1])) != 0)
+			{
+				End--;
+			}
+
+			return Value.substr(Start, End - Start);
+		}
+
+		std::string NormalizeBoneNameForLookup(const std::string& Value)
+		{
+			return ToLowerCopy(TrimAsciiCopy(Value));
+		}
+
+		bool ContainsInsensitive(const std::string& Value, const std::string& Needle)
+		{
+			return ToLowerCopy(Value).find(ToLowerCopy(Needle)) != std::string::npos;
+		}
+
+		bool IsBymlEntry(const application::file::game::SarcFile::Entry& Entry)
+		{
+			return Entry.mBytes.size() >= 2 && ((Entry.mBytes[0] == 'Y' && Entry.mBytes[1] == 'B') || (Entry.mBytes[0] == 'B' && Entry.mBytes[1] == 'Y'));
+		}
+
+		bool IsBymlBytes(const std::vector<unsigned char>& Bytes)
+		{
+			return Bytes.size() >= 2 && ((Bytes[0] == 'Y' && Bytes[1] == 'B') || (Bytes[0] == 'B' && Bytes[1] == 'Y'));
+		}
+
+		bool IsLikelyZStd(const std::vector<unsigned char>& Bytes)
+		{
+			return Bytes.size() >= 4 && Bytes[0] == 0x28 && Bytes[1] == 0xB5 && Bytes[2] == 0x2F && Bytes[3] == 0xFD;
+		}
+
+		bool LooksLikeModelPath(const std::string& Value)
+		{
+			return ContainsInsensitive(Value, ".bfres") || ContainsInsensitive(Value, ".mc") || ContainsInsensitive(Value, ".fmdb");
+		}
+
+		std::string NormalizePath(std::string Path)
+		{
+			std::replace(Path.begin(), Path.end(), '\\', '/');
+			return Path;
+		}
+
+		std::string ConvertWorkFmdbPathToBfresName(const std::string& Path)
+		{
+			std::string Normalized = NormalizePath(Path);
+			if (Normalized.empty())
+			{
+				return "";
+			}
+
+			if (ContainsInsensitive(Normalized, ".bfres") || ContainsInsensitive(Normalized, ".mc"))
+			{
+				return Normalized;
+			}
+
+			if (!ContainsInsensitive(Normalized, ".fmdb"))
+			{
+				return "";
+			}
+
+			if (ContainsInsensitive(Normalized, "work/"))
+			{
+				Normalized = Normalized.substr(Normalized.find("Work/") + 5);
+			}
+
+			const std::string OutputMarker = "/output/";
+			const size_t OutputPos = ToLowerCopy(Normalized).find(ToLowerCopy(OutputMarker));
+			if (OutputPos != std::string::npos)
+			{
+				const std::string ProjectPath = Normalized.substr(0, OutputPos);
+				const std::string ProjectName = std::filesystem::path(ProjectPath).filename().string();
+				const std::string FmdbName = std::filesystem::path(Normalized).stem().string();
+				if (!ProjectName.empty() && !FmdbName.empty())
+				{
+					return ProjectName + "." + FmdbName + ".bfres";
+				}
+			}
+
+			return std::filesystem::path(Normalized).stem().string() + ".bfres";
+		}
+
+		void CollectHornPathCandidates(application::file::game::byml::BymlFile::Node& Node, std::vector<std::string>& Candidates)
+		{
+			if (Node.GetType() == application::file::game::byml::BymlFile::Type::Dictionary)
+			{
+				if (Node.HasChild("ModelProjectName") && Node.HasChild("FmdbName"))
+				{
+					const std::string ProjectName = Node.GetChild("ModelProjectName")->GetValue<std::string>();
+					const std::string FmdbName = Node.GetChild("FmdbName")->GetValue<std::string>();
+					if (!ProjectName.empty() && !FmdbName.empty())
+					{
+						Candidates.push_back("Model/" + ProjectName + "." + FmdbName + ".bfres");
+					}
+				}
+
+				if (Node.HasChild("FilePath"))
+				{
+					const std::string FilePath = Node.GetChild("FilePath")->GetValue<std::string>();
+					if (LooksLikeModelPath(FilePath))
+					{
+						Candidates.push_back(ConvertWorkFmdbPathToBfresName(FilePath));
+					}
+				}
+
+				if (Node.HasChild("HornModelPath"))
+				{
+					const std::string FilePath = Node.GetChild("HornModelPath")->GetValue<std::string>();
+					if (LooksLikeModelPath(FilePath))
+					{
+						Candidates.push_back(ConvertWorkFmdbPathToBfresName(FilePath));
+					}
+				}
+			}
+
+			if (Node.GetType() == application::file::game::byml::BymlFile::Type::StringIndex)
+			{
+				const std::string Value = Node.GetValue<std::string>();
+				if (LooksLikeModelPath(Value))
+				{
+					Candidates.push_back(ConvertWorkFmdbPathToBfresName(Value));
+				}
+			}
+
+			for (application::file::game::byml::BymlFile::Node& Child : Node.GetChildren())
+			{
+				CollectHornPathCandidates(Child, Candidates);
+			}
+		}
+
+		std::optional<std::string> FindHornTypeToken(const application::game::BancEntity& Entity)
+		{
+			const std::array<const std::map<std::string, std::variant<std::string, bool, int32_t, int64_t, uint32_t, uint64_t, float, glm::vec3>>*, 3> Sources =
+			{
+				&Entity.mDynamic,
+				&Entity.mExternalParameter,
+				&Entity.mPresence
+			};
+
+			for (const auto* Source : Sources)
+			{
+				for (const auto& [Key, Value] : *Source)
+				{
+					if (!std::holds_alternative<std::string>(Value))
+					{
+						continue;
+					}
+
+					const std::string& StringValue = std::get<std::string>(Value);
+					if (StringValue.empty())
+					{
+						continue;
+					}
+
+					if (ContainsInsensitive(Key, "horn") && ContainsInsensitive(Key, "type"))
+					{
+						return StringValue;
+					}
+				}
+			}
+
+			return std::nullopt;
+		}
+
+		std::vector<std::string> SplitActorNameTokens(const std::string& Name)
+		{
+			std::vector<std::string> Tokens;
+			std::string CurrentToken;
+			for (char Ch : Name)
+			{
+				if (std::isalnum(static_cast<unsigned char>(Ch)))
+				{
+					CurrentToken.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(Ch))));
+				}
+				else if (!CurrentToken.empty())
+				{
+					Tokens.push_back(CurrentToken);
+					CurrentToken.clear();
+				}
+			}
+			if (!CurrentToken.empty())
+			{
+				Tokens.push_back(CurrentToken);
+			}
+			return Tokens;
+		}
+
+		std::string GetActorTierToken(const std::string& Gyml)
+		{
+			const size_t LastUnderscore = Gyml.find_last_of('_');
+			if (LastUnderscore == std::string::npos || LastUnderscore + 1 >= Gyml.length())
+			{
+				return "";
+			}
+			return ToLowerCopy(Gyml.substr(LastUnderscore + 1));
+		}
+
+		int32_t ScoreTextForActorTokens(const std::string& Text, const std::string& Gyml)
+		{
+			const std::string LowerText = ToLowerCopy(Text);
+			int32_t Score = 0;
+			for (const std::string& Token : SplitActorNameTokens(Gyml))
+			{
+				if (Token.length() < 3)
+				{
+					continue;
+				}
+
+				if (LowerText.find(Token) != std::string::npos)
+				{
+					Score += 1;
+				}
+			}
+			return Score;
+		}
+
+		std::optional<std::string> ResolveHornModelPath(application::game::ActorPack& Pack, const std::optional<std::string>& HornTypeToken, const std::string& Gyml)
+		{
+			struct MappingCandidate
+			{
+				std::string mPath;
+				std::string mFmdbFileName;
+			};
+
+			struct MappingFileCandidate
+			{
+				std::string mEntryName;
+				std::vector<unsigned char> mBytes;
+			};
+
+			std::vector<MappingCandidate> MappingCandidates;
+			std::vector<std::string> FallbackCandidates;
+			auto CollectMappingArray = [&MappingCandidates, &FallbackCandidates, &HornTypeToken](application::file::game::byml::BymlFile& Byml)
+				{
+					for (application::file::game::byml::BymlFile::Node& RootNode : Byml.GetNodes())
+					{
+						if (RootNode.HasChild("HornTypeAndAttachmentMapping"))
+						{
+							application::file::game::byml::BymlFile::Node* MappingArray = RootNode.GetChild("HornTypeAndAttachmentMapping");
+							for (application::file::game::byml::BymlFile::Node& MappingNode : MappingArray->GetChildren())
+							{
+								if (MappingNode.GetType() != application::file::game::byml::BymlFile::Type::Dictionary || !MappingNode.HasChild("HornModelPath"))
+								{
+									continue;
+								}
+
+								if (HornTypeToken.has_value() && MappingNode.HasChild("HornType"))
+								{
+									const std::string MappingHornType = MappingNode.GetChild("HornType")->GetValue<std::string>();
+									const bool TypeMatches = ContainsInsensitive(MappingHornType, HornTypeToken.value());
+									const bool IsDefault = ContainsInsensitive(MappingHornType, "Default");
+									if (!TypeMatches && !IsDefault)
+									{
+										continue;
+									}
+								}
+
+								const std::string HornModelPath = MappingNode.GetChild("HornModelPath")->GetValue<std::string>();
+								if (LooksLikeModelPath(HornModelPath))
+								{
+									const std::string Converted = ConvertWorkFmdbPathToBfresName(HornModelPath);
+									if (!Converted.empty())
+									{
+										MappingCandidate Candidate;
+										Candidate.mPath = Converted;
+										Candidate.mFmdbFileName = std::filesystem::path(NormalizePath(HornModelPath)).stem().string();
+										MappingCandidates.push_back(Candidate);
+									}
+								}
+							}
+						}
+
+						CollectHornPathCandidates(RootNode, FallbackCandidates);
+					}
+				};
+
+			std::vector<MappingFileCandidate> PackMappingFiles;
+			auto AppendMappingFilesFromSarc = [&PackMappingFiles](application::file::game::SarcFile& SourceSarc)
+				{
+					for (const application::file::game::SarcFile::Entry& Entry : SourceSarc.GetEntries())
+					{
+						if (!ContainsInsensitive(Entry.mName, "Ecosystem/HornTypeAndAttachmentMappingTable"))
+						{
+							continue;
+						}
+
+						std::vector<unsigned char> MappingBytes = Entry.mBytes;
+						if (!IsBymlBytes(MappingBytes) && IsLikelyZStd(MappingBytes))
+						{
+							MappingBytes = application::file::game::ZStdBackend::Decompress(MappingBytes);
+						}
+
+						if (!IsBymlBytes(MappingBytes))
+						{
+							continue;
+						}
+
+						PackMappingFiles.push_back({ Entry.mName, std::move(MappingBytes) });
+					}
+				};
+
+			AppendMappingFilesFromSarc(Pack.mPack);
+
+			// Certain bokoblin junior variants keep horn mapping data in ResidentCommon.
+			// Include that source explicitly so horn model path resolution can succeed.
+			if (ToLowerCopy(Gyml).starts_with("enemy_bokoblin_junior"))
+			{
+				const std::string ResidentCommonPath = application::util::FileUtil::GetRomFSFilePath("Pack/ResidentCommon.pack.zs");
+				if (application::util::FileUtil::FileExists(ResidentCommonPath))
+				{
+					application::file::game::SarcFile ResidentCommonPack(application::file::game::ZStdBackend::Decompress(ResidentCommonPath));
+					if (ResidentCommonPack.mLoaded)
+					{
+						AppendMappingFilesFromSarc(ResidentCommonPack);
+					}
+				}
+			}
+
+			if (!PackMappingFiles.empty())
+			{
+				// Pick mapping file by BGYML filename relative to current actor pack name.
+				// Only this file should define the correct HornModelPath for the actor tier.
+				int32_t BestScore = std::numeric_limits<int32_t>::min();
+				MappingFileCandidate* BestFile = nullptr;
+				for (MappingFileCandidate& FileCandidate : PackMappingFiles)
+				{
+					const std::string FileStem = std::filesystem::path(FileCandidate.mEntryName).stem().string();
+					int32_t Score = ScoreTextForActorTokens(FileStem, Gyml) * 20;
+					if (ToLowerCopy(FileStem) == ToLowerCopy(Gyml))
+					{
+						Score += 1000;
+					}
+
+					if (Score >= BestScore)
+					{
+						BestScore = Score;
+						BestFile = &FileCandidate;
+					}
+				}
+
+				if (BestFile != nullptr)
+				{
+					application::file::game::byml::BymlFile Byml(BestFile->mBytes);
+					CollectMappingArray(Byml);
+				}
+			}
+
+			if (MappingCandidates.empty())
+			{
+				static const std::array<std::string, 4> RomFsFallbackPaths =
+				{
+					"Ecosystem/HornTypeAndAttachmentMappingTable.bgyml",
+					"Ecosystem/HornTypeAndAttachmentMappingTable.byml",
+					"Ecosystem/HornTypeAndAttachmentMappingTable.bgyml.zs",
+					"Ecosystem/HornTypeAndAttachmentMappingTable.byml.zs"
+				};
+
+				for (const std::string& FallbackPath : RomFsFallbackPaths)
+				{
+					const std::string AbsolutePath = application::util::FileUtil::GetRomFSFilePath(FallbackPath);
+					if (!application::util::FileUtil::FileExists(AbsolutePath))
+					{
+						continue;
+					}
+
+					std::vector<unsigned char> MappingBytes = application::util::FileUtil::ReadFile(AbsolutePath);
+					if (!IsBymlBytes(MappingBytes) && IsLikelyZStd(MappingBytes))
+					{
+						MappingBytes = application::file::game::ZStdBackend::Decompress(MappingBytes);
+					}
+
+					if (!IsBymlBytes(MappingBytes))
+					{
+						continue;
+					}
+
+					application::file::game::byml::BymlFile Byml(MappingBytes);
+					CollectMappingArray(Byml);
+				}
+			}
+
+			MappingCandidates.erase(std::remove_if(MappingCandidates.begin(), MappingCandidates.end(), [](const MappingCandidate& Candidate)
+				{
+					return Candidate.mPath.empty();
+				}), MappingCandidates.end());
+
+			FallbackCandidates.erase(std::remove_if(FallbackCandidates.begin(), FallbackCandidates.end(), [](const std::string& Candidate)
+				{
+					return Candidate.empty();
+				}), FallbackCandidates.end());
+
+			if (!MappingCandidates.empty())
+			{
+				// Prefer entries that match the current actor name, while still
+				// keeping "last entry wins" behavior when scores tie.
+				int32_t BestScore = std::numeric_limits<int32_t>::min();
+				std::string Selected = MappingCandidates.back().mPath;
+				const std::string TierToken = GetActorTierToken(Gyml);
+				for (const MappingCandidate& Candidate : MappingCandidates)
+				{
+					int32_t Score = ScoreTextForActorTokens(Candidate.mPath, Gyml);
+					Score += ScoreTextForActorTokens(Candidate.mFmdbFileName, Gyml) * 10;
+					if (!TierToken.empty())
+					{
+						const std::string LowerFmdb = ToLowerCopy(Candidate.mFmdbFileName);
+						if (LowerFmdb.ends_with("_" + TierToken))
+						{
+							Score += 200;
+						}
+					}
+
+					if (Score >= BestScore)
+					{
+						BestScore = Score;
+						Selected = Candidate.mPath;
+					}
+				}
+				return NormalizePath(Selected);
+			}
+
+			if (FallbackCandidates.empty())
+			{
+				return std::nullopt;
+			}
+
+			return NormalizePath(FallbackCandidates.back());
+		}
+
+		application::gl::BfresRenderer* ResolveHornRenderer(const std::optional<std::string>& HornModelPath)
+		{
+			if (!HornModelPath.has_value() || HornModelPath->empty())
+			{
+				return nullptr;
+			}
+
+			const std::string NormalizedPath = NormalizePath(HornModelPath.value());
+			application::file::game::bfres::BfresFile* HornFile = nullptr;
+			if (ContainsInsensitive(NormalizedPath, ".fmdb"))
+			{
+				HornFile = application::manager::BfresFileMgr::GetBfresFile(application::util::FileUtil::GetBfresFilePath(ConvertWorkFmdbPathToBfresName(NormalizedPath)));
+			}
+			else if (ContainsInsensitive(NormalizedPath, ".mc"))
+			{
+				std::string Stem = std::filesystem::path(NormalizedPath).stem().string();
+				if (!ContainsInsensitive(Stem, ".bfres"))
+				{
+					Stem += ".bfres";
+				}
+				HornFile = application::manager::BfresFileMgr::GetBfresFile(application::util::FileUtil::GetBfresFilePath(Stem));
+			}
+			else if (ContainsInsensitive(NormalizedPath, ".bfres"))
+			{
+				if (NormalizedPath.find('/') != std::string::npos)
+				{
+					HornFile = application::manager::BfresFileMgr::GetBfresFile(application::util::FileUtil::GetRomFSFilePath(NormalizedPath));
+				}
+				else
+				{
+					HornFile = application::manager::BfresFileMgr::GetBfresFile(application::util::FileUtil::GetBfresFilePath(std::filesystem::path(NormalizedPath).stem().string() + ".bfres"));
+				}
+			}
+
+			return HornFile != nullptr ? application::manager::BfresRendererMgr::GetRenderer(HornFile) : nullptr;
+		}
+
+		std::string GetMaterialNameHint(const std::string& MaterialName)
+		{
+			std::string Lower = ToLowerCopy(MaterialName);
+			if (Lower.starts_with("mt_"))
+			{
+				Lower = Lower.substr(3);
+			}
+			return Lower;
+		}
+
+		std::vector<std::string> GetMaterialSearchTokens(const std::string& MaterialName)
+		{
+			std::vector<std::string> Tokens;
+			const std::string Base = GetMaterialNameHint(MaterialName);
+			if (!Base.empty())
+			{
+				Tokens.push_back(Base);
+			}
+
+			return Tokens;
+		}
+
+		bool IsLikelyAlbedoName(const std::string& TextureName)
+		{
+			const std::string Lower = ToLowerCopy(TextureName);
+			return Lower.find("alb") != std::string::npos || Lower.find("albedo") != std::string::npos || Lower.find("basecolor") != std::string::npos;
+		}
+
+		std::optional<std::unordered_map<std::string, std::string>> ResolveTexturePatternAlbedoOverrides(
+			const std::string& ModelProjectName,
+			const std::string& AnimationName,
+			const int32_t Frame)
+		{
+			if (ModelProjectName.empty() || AnimationName.empty() || Frame < 0)
+			{
+				return std::nullopt;
+			}
+
+			std::string AnimPath = application::util::FileUtil::GetRomFSFilePath("Model/" + ModelProjectName + ".anim.bfres.zs");
+			if (!application::util::FileUtil::FileExists(AnimPath))
+			{
+				AnimPath = application::util::FileUtil::GetRomFSFilePath("Model/" + ModelProjectName + ".anim.bfres");
+			}
+			if (!application::util::FileUtil::FileExists(AnimPath))
+			{
+				return std::nullopt;
+			}
+
+			std::vector<unsigned char> AnimBytes = application::util::FileUtil::ReadFile(AnimPath);
+			if (AnimBytes.empty())
+			{
+				return std::nullopt;
+			}
+			if (AnimPath.ends_with(".zs"))
+			{
+				AnimBytes = application::file::game::ZStdBackend::Decompress(AnimBytes);
+			}
+			if (AnimBytes.size() < 0x100)
+			{
+				return std::nullopt;
+			}
+
+			application::file::game::bfres::BfresBinaryVectorReader Reader(AnimBytes, application::file::game::bfres::BfresFile::gExternalBinaryStrings);
+			application::file::game::bfres::BfresFile::BinaryHeader BinHeader;
+			application::file::game::bfres::BfresFile::ResHeader Header;
+			Reader.ReadStruct(&BinHeader, sizeof(BinHeader));
+			Reader.ReadStruct(&Header, sizeof(Header));
+			if (Header.MaterialAnimOffset == 0 || Header.MaterialAnimDictionarymOffset == 0 || Header.MaterialAnimCount == 0)
+			{
+				return std::nullopt;
+			}
+
+			using ResString = application::file::game::bfres::BfresFile::ResString;
+			using ResDictString = application::file::game::bfres::BfresFile::ResDict<ResString>;
+			ResDictString MaterialAnimDict = application::file::game::bfres::BfresFile::ReadDictionary<ResString>(Reader, Header.MaterialAnimDictionarymOffset);
+			if (MaterialAnimDict.mNodes.empty())
+			{
+				return std::nullopt;
+			}
+
+			auto SafeReadString = [&](uint64_t Offset) -> std::string
+				{
+					if (Offset == 0 || Offset + 2 > AnimBytes.size())
+					{
+						return "";
+					}
+					return Reader.ReadStringOffset(Offset);
+				};
+
+			auto ReadArrayQWords = [&](uint64_t Offset, uint32_t Count) -> std::vector<uint64_t>
+				{
+					std::vector<uint64_t> Result;
+					if (Offset == 0 || Count == 0)
+					{
+						return Result;
+					}
+					if (Offset + static_cast<uint64_t>(Count) * sizeof(uint64_t) > AnimBytes.size())
+					{
+						return Result;
+					}
+					Result.resize(Count);
+					std::memcpy(Result.data(), AnimBytes.data() + Offset, static_cast<size_t>(Count) * sizeof(uint64_t));
+					return Result;
+				};
+
+			auto ReadU32 = [&](uint64_t Offset) -> uint32_t
+				{
+					if (Offset + sizeof(uint32_t) > AnimBytes.size())
+					{
+						return 0;
+					}
+					uint32_t Value = 0;
+					std::memcpy(&Value, AnimBytes.data() + Offset, sizeof(uint32_t));
+					return Value;
+				};
+
+			auto ReadU64 = [&](uint64_t Offset) -> uint64_t
+				{
+					if (Offset + sizeof(uint64_t) > AnimBytes.size())
+					{
+						return 0;
+					}
+					uint64_t Value = 0;
+					std::memcpy(&Value, AnimBytes.data() + Offset, sizeof(uint64_t));
+					return Value;
+				};
+
+			auto IsSaneOffset = [&](uint64_t Offset) -> bool
+				{
+					return Offset > 0 && Offset < AnimBytes.size();
+				};
+
+			const std::string AnimationNameLower = ToLowerCopy(AnimationName);
+			uint64_t MatAnimOffset = 0;
+			for (uint32_t i = 0; i < MaterialAnimDict.mNodes.size(); i++)
+			{
+				const std::string Key = MaterialAnimDict.GetKey(i);
+				if (ToLowerCopy(Key) == AnimationNameLower)
+				{
+					MatAnimOffset = Header.MaterialAnimOffset + static_cast<uint64_t>(i) * 0x70;
+					break;
+				}
+			}
+			if (MatAnimOffset == 0 || MatAnimOffset + 0x70 > AnimBytes.size())
+			{
+				return std::nullopt;
+			}
+
+			const uint32_t Magic = ReadU32(MatAnimOffset + 0x00);
+			const uint64_t MatAnimNameOffset = ReadU64(MatAnimOffset + 0x08);
+			const uint64_t BindDataOffset = ReadU64(MatAnimOffset + 0x20);
+			const uint64_t TextureValueTableOffset = ReadU64(MatAnimOffset + 0x38);
+			const uint64_t PackedCountsA = ReadU64(MatAnimOffset + 0x58);
+			const uint64_t PackedCountsB = ReadU64(MatAnimOffset + 0x60);
+			const uint64_t PackedCountsC = ReadU64(MatAnimOffset + 0x68);
+			if (Magic != 0x41414D46 || BindDataOffset == 0 || TextureValueTableOffset == 0)
+			{
+				return std::nullopt;
+			}
+
+			const uint32_t MaterialCount = static_cast<uint32_t>((PackedCountsB >> 16) & 0xFFFF);
+			const uint32_t TexturePatternCount = static_cast<uint32_t>(PackedCountsC & 0xFFFFFFFF);
+			const uint32_t TextureValueCount = static_cast<uint32_t>((PackedCountsC >> 32) & 0xFFFFFFFF);
+			if (MaterialCount == 0 || TextureValueCount == 0)
+			{
+				application::util::Logger::Warning("TexturePatternDebug", "FMAB parse failed for %s/%s: materialCount=%u textureValueCount=%u", ModelProjectName.c_str(), AnimationName.c_str(), MaterialCount, TextureValueCount);
+				return std::nullopt;
+			}
+
+			application::util::Logger::Info("TexturePatternDebug", "FMAB opened %s (anim=%s, fmab=%s, materials=%u, patterns=%u, values=%u)",
+				AnimPath.c_str(),
+				SafeReadString(MatAnimNameOffset).c_str(),
+				AnimationName.c_str(),
+				MaterialCount,
+				TexturePatternCount,
+				TextureValueCount);
+
+			const std::vector<uint64_t> TextureValueOffsets = ReadArrayQWords(TextureValueTableOffset, TextureValueCount);
+			if (TextureValueOffsets.empty())
+			{
+				application::util::Logger::Warning("TexturePatternDebug", "FMAB parse failed for %s/%s: no texture value offsets", ModelProjectName.c_str(), AnimationName.c_str());
+				return std::nullopt;
+			}
+
+			std::vector<std::string> TextureValues;
+			TextureValues.reserve(TextureValueOffsets.size());
+			for (uint64_t Offset : TextureValueOffsets)
+			{
+				TextureValues.push_back(SafeReadString(Offset));
+			}
+
+			std::unordered_map<std::string, std::string> OverridesByMaterial;
+
+			for (uint32_t MaterialIndex = 0; MaterialIndex < MaterialCount; MaterialIndex++)
+			{
+				const uint64_t TrackOffset = BindDataOffset + static_cast<uint64_t>(MaterialIndex) * 0x40;
+				if (TrackOffset + 0x40 > AnimBytes.size())
+				{
+					continue;
+				}
+
+				struct TrackLayout
+				{
+					uint64_t mMaterialNameOffset = 0;
+					uint64_t mSamplerNameArrayOffset = 0;
+					uint64_t mCurveArrayOffset = 0;
+					uint32_t mTexturePatternCount = 0;
+					bool mValid = false;
+				};
+
+				auto IsCurveSlotValid = [&](uint64_t CurveSlotOffset) -> bool
+					{
+						if (!IsSaneOffset(CurveSlotOffset) || CurveSlotOffset + 0x30 > AnimBytes.size())
+						{
+							return false;
+						}
+
+						const uint64_t KeyFrameBufferOffset = ReadU64(CurveSlotOffset + 0x00);
+						const uint64_t ValueBufferOffset = ReadU64(CurveSlotOffset + 0x08);
+						const uint64_t PackedCurveTypeAndKeyCount = ReadU64(CurveSlotOffset + 0x10);
+						const uint32_t KeyCount = static_cast<uint32_t>((PackedCurveTypeAndKeyCount >> 16) & 0xFFFF);
+						if (KeyCount == 0 || KeyCount >= 512)
+						{
+							return false;
+						}
+						if (!IsSaneOffset(KeyFrameBufferOffset) || !IsSaneOffset(ValueBufferOffset))
+						{
+							return false;
+						}
+						return KeyFrameBufferOffset + KeyCount <= AnimBytes.size() &&
+							ValueBufferOffset + KeyCount <= AnimBytes.size();
+					};
+
+				auto ResolveTrackLayout = [&]() -> TrackLayout
+				{
+					TrackLayout BestLayout;
+					int32_t BestScore = -1;
+					std::array<uint64_t, 8> RawFields{};
+					for (uint32_t FieldIndex = 0; FieldIndex < RawFields.size(); FieldIndex++)
+					{
+						RawFields[FieldIndex] = ReadU64(TrackOffset + static_cast<uint64_t>(FieldIndex) * 8);
+					}
+
+					for (uint32_t NameIndex = 0; NameIndex < RawFields.size(); NameIndex++)
+					{
+						const uint64_t NameOffset = RawFields[NameIndex];
+						const std::string MaterialNameCandidate = SafeReadString(NameOffset);
+						if (MaterialNameCandidate.empty() || !(MaterialNameCandidate.starts_with("Mt_") || MaterialNameCandidate.starts_with("mt_")))
+						{
+							continue;
+						}
+
+						for (uint32_t SamplerIndexField = 0; SamplerIndexField < RawFields.size(); SamplerIndexField++)
+						{
+							if (SamplerIndexField == NameIndex)
+							{
+								continue;
+							}
+
+							const uint64_t SamplerArrayOffset = RawFields[SamplerIndexField];
+							if (!IsSaneOffset(SamplerArrayOffset) || SamplerArrayOffset + sizeof(uint64_t) > AnimBytes.size())
+							{
+								continue;
+							}
+
+							const std::string FirstSamplerName = SafeReadString(ReadU64(SamplerArrayOffset));
+							if (FirstSamplerName.empty() || FirstSamplerName[0] != '_')
+							{
+								continue;
+							}
+
+							for (uint32_t CurveIndexField = 0; CurveIndexField < RawFields.size(); CurveIndexField++)
+							{
+								if (CurveIndexField == NameIndex || CurveIndexField == SamplerIndexField)
+								{
+									continue;
+								}
+
+								const uint64_t CurveArrayOffset = RawFields[CurveIndexField];
+								if (!IsCurveSlotValid(CurveArrayOffset))
+								{
+									continue;
+								}
+
+								uint32_t PatternCount = 0;
+								for (uint32_t Probe = 0; Probe < 32; Probe++)
+								{
+									const uint64_t SamplerSlotOffset = SamplerArrayOffset + static_cast<uint64_t>(Probe) * sizeof(uint64_t);
+									const uint64_t CurveSlotOffset = CurveArrayOffset + static_cast<uint64_t>(Probe) * 0x30;
+									if (SamplerSlotOffset + sizeof(uint64_t) > AnimBytes.size() || CurveSlotOffset + 0x30 > AnimBytes.size())
+									{
+										break;
+									}
+
+									const std::string SamplerNameProbe = SafeReadString(ReadU64(SamplerSlotOffset));
+									if (SamplerNameProbe.empty() || SamplerNameProbe[0] != '_')
+									{
+										break;
+									}
+									if (!IsCurveSlotValid(CurveSlotOffset))
+									{
+										break;
+									}
+
+									PatternCount++;
+								}
+
+								if (PatternCount == 0)
+								{
+									continue;
+								}
+
+								const int32_t Score = static_cast<int32_t>(PatternCount);
+								if (Score > BestScore)
+								{
+									BestScore = Score;
+									BestLayout.mMaterialNameOffset = NameOffset;
+									BestLayout.mSamplerNameArrayOffset = SamplerArrayOffset;
+									BestLayout.mCurveArrayOffset = CurveArrayOffset;
+									BestLayout.mTexturePatternCount = PatternCount;
+									BestLayout.mValid = true;
+								}
+							}
+						}
+					}
+
+					return BestLayout;
+				};
+
+				TrackLayout Layout = ResolveTrackLayout();
+				if (!Layout.mValid)
+				{
+					continue;
+				}
+
+				const uint64_t MaterialNameOffset = Layout.mMaterialNameOffset;
+				const uint64_t SamplerNameArrayOffset = Layout.mSamplerNameArrayOffset;
+				const uint64_t CurveArrayOffset = Layout.mCurveArrayOffset;
+				const std::string MaterialName = SafeReadString(MaterialNameOffset);
+				if (MaterialName.empty())
+				{
+					continue;
+				}
+
+				const uint32_t MaterialTexturePatternCount = Layout.mTexturePatternCount;
+				if (MaterialTexturePatternCount == 0)
+				{
+					continue;
+				}
+
+				const std::vector<uint64_t> SamplerOffsets = ReadArrayQWords(SamplerNameArrayOffset, MaterialTexturePatternCount);
+				if (SamplerOffsets.empty())
+				{
+					continue;
+				}
+
+				// Use the same value table the material animation references and choose per-material
+				// textures by frame token (middle/senior/curse/etc). This follows FMAB value sets
+				// while keeping parser scope minimal for now.
+				for (uint32_t SamplerIndex = 0; SamplerIndex < MaterialTexturePatternCount && SamplerIndex < SamplerOffsets.size(); SamplerIndex++)
+				{
+					const std::string SamplerName = SafeReadString(SamplerOffsets[SamplerIndex]);
+					if (SamplerName.empty() || !SamplerName.starts_with("_a"))
+					{
+						continue;
+					}
+
+					// Preferred path: decode this sampler's texture pattern curve and sample
+					// the exact ModelInfo frame.
+					bool AppliedFromCurve = false;
+					const uint64_t CurveOffset = CurveArrayOffset + static_cast<uint64_t>(SamplerIndex) * 0x30;
+					if (CurveArrayOffset != 0 && CurveOffset + 0x30 <= AnimBytes.size())
+					{
+						const uint64_t KeyFrameBufferOffset = ReadU64(CurveOffset + 0x00);
+						const uint64_t ValueBufferOffset = ReadU64(CurveOffset + 0x08);
+						const uint64_t PackedCurveTypeAndKeyCount = ReadU64(CurveOffset + 0x10);
+						const uint64_t PackedFlags = ReadU64(CurveOffset + 0x20);
+						const uint32_t KeyCount = static_cast<uint32_t>((PackedCurveTypeAndKeyCount >> 16) & 0xFFFF);
+						const int32_t ValueBaseIndex = static_cast<int32_t>((PackedFlags >> 32) & 0xFF);
+
+						if (KeyCount > 0 &&
+							KeyCount < 512 &&
+							KeyFrameBufferOffset + KeyCount <= AnimBytes.size() &&
+							ValueBufferOffset + KeyCount <= AnimBytes.size())
+						{
+							std::vector<std::pair<int32_t, int32_t>> KeyValuePairs;
+							KeyValuePairs.reserve(KeyCount);
+							for (uint32_t KeyIndex = 0; KeyIndex < KeyCount; KeyIndex++)
+							{
+								const int32_t KeyFrame = static_cast<int32_t>(AnimBytes[KeyFrameBufferOffset + KeyIndex]);
+								const int8_t ValueDelta = static_cast<int8_t>(AnimBytes[ValueBufferOffset + KeyIndex]);
+								const int32_t ValueIndex = ValueBaseIndex + static_cast<int32_t>(ValueDelta);
+								if (ValueIndex < 0 || static_cast<size_t>(ValueIndex) >= TextureValues.size())
+								{
+									continue;
+								}
+								KeyValuePairs.emplace_back(KeyFrame, ValueIndex);
+							}
+
+							if (!KeyValuePairs.empty())
+							{
+								std::sort(KeyValuePairs.begin(), KeyValuePairs.end(), [](const auto& Left, const auto& Right)
+									{
+										return Left.first < Right.first;
+									});
+
+								const int32_t TargetFrame = std::max(0, Frame);
+								int32_t SelectedValueIndex = KeyValuePairs.front().second;
+								for (const auto& [KeyFrame, ValueIndex] : KeyValuePairs)
+								{
+									if (KeyFrame > TargetFrame)
+									{
+										break;
+									}
+									SelectedValueIndex = ValueIndex;
+								}
+
+								if (SelectedValueIndex >= 0 && static_cast<size_t>(SelectedValueIndex) < TextureValues.size())
+								{
+									OverridesByMaterial[MaterialName] = TextureValues[static_cast<size_t>(SelectedValueIndex)];
+									AppliedFromCurve = true;
+								}
+							}
+						}
+					}
+
+					if (AppliedFromCurve)
+					{
+						continue;
+					}
+
+					const std::vector<std::string> MaterialTokens = GetMaterialSearchTokens(MaterialName);
+					std::vector<std::string> StrictCandidates;
+					for (const std::string& TextureName : TextureValues)
+					{
+						if (!IsLikelyAlbedoName(TextureName))
+						{
+							continue;
+						}
+						const std::string LowerTex = ToLowerCopy(TextureName);
+						bool MatchesMaterial = MaterialTokens.empty();
+						for (const std::string& Token : MaterialTokens)
+						{
+							if (LowerTex.find(Token) != std::string::npos)
+							{
+								MatchesMaterial = true;
+								break;
+							}
+						}
+
+						if (!MatchesMaterial)
+						{
+							continue;
+						}
+						StrictCandidates.push_back(TextureName);
+					}
+
+					std::vector<std::string> Candidates = StrictCandidates;
+
+					// Limited alias fallback for families where the material is named "skin" but
+					// textures are named "...Body_Alb". Keep this narrow to avoid cross-material bleed.
+					const std::string MaterialHint = GetMaterialNameHint(MaterialName);
+					if (Candidates.empty() && MaterialHint == "skin")
+					{
+						for (const std::string& TextureName : TextureValues)
+						{
+							if (!IsLikelyAlbedoName(TextureName))
+							{
+								continue;
+							}
+
+							if (ToLowerCopy(TextureName).find("body") != std::string::npos)
+							{
+								Candidates.push_back(TextureName);
+							}
+						}
+					}
+
+					// Final fallback for hashed/shared pools when no semantic match exists.
+					if (Candidates.empty())
+					{
+						for (const std::string& TextureName : TextureValues)
+						{
+							if (IsLikelyAlbedoName(TextureName))
+							{
+								Candidates.push_back(TextureName);
+							}
+						}
+					}
+
+					if (Candidates.empty())
+					{
+						continue;
+					}
+
+					// Follow the exact ModelInfo frame index deterministically, without relying
+					// on naming conventions (red/blue/middle/etc).
+					const size_t FrameIndex = static_cast<size_t>(std::max(0, Frame));
+					const std::string Selected = Candidates[std::min(FrameIndex, Candidates.size() - 1)];
+
+					OverridesByMaterial[MaterialName] = Selected;
+				}
+			}
+
+			if (OverridesByMaterial.empty())
+			{
+				application::util::Logger::Warning("TexturePatternDebug", "FMAB parsed but produced no albedo overrides for %s/%s frame=%d", ModelProjectName.c_str(), AnimationName.c_str(), Frame);
+			}
+			return OverridesByMaterial.empty() ? std::nullopt : std::optional<std::unordered_map<std::string, std::string>>(std::move(OverridesByMaterial));
+		}
+	}
+
 	std::vector<const char*> BancEntity::BakedFluid::gFluidShapeTypes = 
 	{
 		"Box",
@@ -470,11 +1487,22 @@ namespace application::game
 	bool BancEntity::GenerateBancEntityInfo()
 	{
 		mActorPack = application::manager::ActorPackMgr::GetActorPack(mGyml);
+		mHornBfresRenderer = nullptr;
+		mHornAttachmentMatrix = glm::mat4(1.0f);
+		mHornModelCorrectionMatrix = glm::mat4(1.0f);
+		mHasHornAttachment = false;
+		mTexturePatternFrame = -1;
+		mTexturePatternAnimationName.clear();
+		mTexturePatternModelProjectName.clear();
+		mTexturePatternOverrideKey.clear();
+		mTexturePatternAlbedoOverridesByMaterial.clear();
 
 		if (mActorPack == nullptr)
 			return false;
 
 
+		mBfresRenderer = nullptr;
+		bool HasResolvedMainModel = false;
 		if (application::game::actor_component::ActorComponentBase* BaseComponent = mActorPack->GetComponent(application::game::actor_component::ActorComponentBase::ComponentType::MODEL_INFO); BaseComponent != nullptr)
 		{
 			application::game::actor_component::ActorComponentModelInfo* ModelInfoComponent = static_cast<application::game::actor_component::ActorComponentModelInfo*>(BaseComponent);
@@ -482,25 +1510,168 @@ namespace application::game
 			{
 				if (ModelInfoComponent->mModelProjectName.has_value() && ModelInfoComponent->mFmdbName.has_value() && !ModelInfoComponent->mModelProjectName.value().empty() && !ModelInfoComponent->mFmdbName.value().empty())
 				{
+					mTexturePatternModelProjectName = ModelInfoComponent->mModelProjectName.value();
 					application::file::game::bfres::BfresFile* File = application::manager::BfresFileMgr::GetBfresFile(application::util::FileUtil::GetBfresFilePath(ModelInfoComponent->mModelProjectName.value() + "." + ModelInfoComponent->mFmdbName.value() + ".bfres"));
 					mBfresRenderer = application::manager::BfresRendererMgr::GetRenderer(File);
-					return mBfresRenderer != nullptr;
+					HasResolvedMainModel = mBfresRenderer != nullptr && !mBfresRenderer->mBfresFile->mDefaultModel;
+				}
+
+				// Texture pattern animations in ModelInfo are evaluated at a fixed frame.
+				// We use that frame as static texture array index override for rendering.
+				if (ModelInfoComponent->mModelVariationFmabName.has_value() && ModelInfoComponent->mModelVariationFmabFrame.has_value() && !ModelInfoComponent->mModelVariationFmabName->empty())
+				{
+					mTexturePatternAnimationName = std::filesystem::path(ModelInfoComponent->mModelVariationFmabName.value()).stem().string();
+					mTexturePatternFrame = std::max(0, static_cast<int32_t>(std::lround(ModelInfoComponent->mModelVariationFmabFrame.value())));
+					mTexturePatternOverrideKey = mTexturePatternModelProjectName + "|" + mTexturePatternAnimationName + "|" + std::to_string(mTexturePatternFrame);
+					if (std::optional<std::unordered_map<std::string, std::string>> Overrides = ResolveTexturePatternAlbedoOverrides(mTexturePatternModelProjectName, mTexturePatternAnimationName, mTexturePatternFrame); Overrides.has_value())
+					{
+						mTexturePatternAlbedoOverridesByMaterial = std::move(Overrides.value());
+					}
 				}
 			}
 		}
 
-		application::file::game::bfres::BfresFile* File = &application::manager::BfresFileMgr::gBfresFiles["Default"];
-		for (auto& [Key, Val] : application::manager::BfresFileMgr::gBfresFiles)
+		if (mBfresRenderer == nullptr)
 		{
-			if (mGyml.find(Key) != std::string::npos)
+			application::file::game::bfres::BfresFile* File = &application::manager::BfresFileMgr::gBfresFiles["Default"];
+			for (auto& [Key, Val] : application::manager::BfresFileMgr::gBfresFiles)
 			{
-				File = &Val;
-				break;
+				if (mGyml.find(Key) != std::string::npos)
+				{
+					File = &Val;
+					break;
+				}
+			}
+
+			mBfresRenderer = application::manager::BfresRendererMgr::GetRenderer(File);
+		}
+
+		if (mBfresRenderer == nullptr)
+		{
+			return false;
+		}
+
+		if (HasResolvedMainModel)
+		{
+			std::optional<std::string> HornModelPath = ResolveHornModelPath(*mActorPack, FindHornTypeToken(*this), mGyml);
+			mHornBfresRenderer = ResolveHornRenderer(HornModelPath);
+
+			if (mHornBfresRenderer != nullptr)
+			{
+				// Main actor attachment point in world space.
+				application::file::game::bfres::BfresFile::Model& MainModel = mBfresRenderer->mBfresFile->Models.GetByIndex(0).mValue;
+				application::file::game::bfres::BfresFile::Skeleton::Bone* SelectedBone = nullptr;
+				for (auto& [BoneName, BoneNode] : MainModel.ModelSkeleton.Bones.mNodes)
+				{
+					const std::string LowerName = ToLowerCopy(BoneName);
+					if (LowerName == "material_pod")
+					{
+						SelectedBone = &BoneNode.mValue;
+						break;
+					}
+				}
+
+				if (SelectedBone == nullptr)
+				{
+					for (auto& [BoneName, BoneNode] : MainModel.ModelSkeleton.Bones.mNodes)
+					{
+						const std::string LowerName = ToLowerCopy(BoneName);
+						if (ContainsInsensitive(LowerName, "material_pod"))
+						{
+							SelectedBone = &BoneNode.mValue;
+							break;
+						}
+					}
+				}
+
+				if (SelectedBone != nullptr)
+				{
+					mHornAttachmentMatrix = SelectedBone->WorldMatrix;
+					mHasHornAttachment = true;
+				}
+
+				// Horn-local correction:
+				// Bind horn sub_root local space to actor Material_Pod.
+				// Since horn vertices are baked into the mesh's rigid bind bone space,
+				// remap from baked-bone space to sub_root space before attachment.
+				application::file::game::bfres::BfresFile::Model& HornModel = mHornBfresRenderer->mBfresFile->Models.GetByIndex(0).mValue;
+				if (!HornModel.ModelSkeleton.Bones.mNodes.empty())
+				{
+					uint32_t BakedBoneIndex = 0;
+					for (const auto& [ShapeName, ShapeNode] : HornModel.Shapes.mNodes)
+					{
+						if (ShapeNode.mValue.BoneIndex >= 0)
+						{
+							BakedBoneIndex = static_cast<uint32_t>(ShapeNode.mValue.BoneIndex);
+							break;
+						}
+					}
+
+					application::file::game::bfres::BfresFile::Skeleton::Bone& BakedBone = HornModel.ModelSkeleton.Bones.GetByIndex(BakedBoneIndex).mValue;
+					application::file::game::bfres::BfresFile::Skeleton::Bone* SubRootBone = nullptr;
+					std::string SelectedSubRootBoneName = "";
+
+					// Pass 1: exact-case canonical token as requested.
+					for (auto& [BoneName, BoneNode] : HornModel.ModelSkeleton.Bones.mNodes)
+					{
+						if (TrimAsciiCopy(BoneName) == "Sub_Root")
+						{
+							SubRootBone = &BoneNode.mValue;
+							SelectedSubRootBoneName = BoneName;
+							break;
+						}
+					}
+
+					// Pass 2: normalized exact match.
+					if (SubRootBone == nullptr)
+					{
+						for (auto& [BoneName, BoneNode] : HornModel.ModelSkeleton.Bones.mNodes)
+						{
+							if (NormalizeBoneNameForLookup(BoneName) == "sub_root")
+							{
+								SubRootBone = &BoneNode.mValue;
+								SelectedSubRootBoneName = BoneName;
+								break;
+							}
+						}
+					}
+
+					// Pass 3: normalized contains match for minor naming variants.
+					if (SubRootBone == nullptr)
+					{
+						for (auto& [BoneName, BoneNode] : HornModel.ModelSkeleton.Bones.mNodes)
+						{
+							if (NormalizeBoneNameForLookup(BoneName).find("sub_root") != std::string::npos)
+							{
+								SubRootBone = &BoneNode.mValue;
+								SelectedSubRootBoneName = BoneName;
+								break;
+							}
+						}
+					}
+
+					// Fallback keeps prior behavior if a horn unexpectedly has no sub_root.
+					if (SubRootBone == nullptr)
+					{
+						SubRootBone = &BakedBone;
+						application::util::Logger::Warning("TexturePatternDebug", "Horn Sub_Root not found for actor=%s, using baked bone index=%u", mGyml.c_str(), BakedBoneIndex);
+					}
+					else
+					{
+						application::util::Logger::Info("TexturePatternDebug", "Horn bind actor=%s Sub_Root=%s bakedBoneIndex=%u", mGyml.c_str(), SelectedSubRootBoneName.c_str(), BakedBoneIndex);
+					}
+
+					mHornModelCorrectionMatrix = SubRootBone->WorldMatrix * glm::inverse(BakedBone.WorldMatrix);
+				}
+
+				if (!mHasHornAttachment)
+				{
+					mHornBfresRenderer = nullptr;
+				}
 			}
 		}
 
-		mBfresRenderer = application::manager::BfresRendererMgr::GetRenderer(File);
-		return mBfresRenderer != nullptr;
+		return true;
 	}
 
 	application::file::game::byml::BymlFile::Node BancEntity::ToByml()

@@ -4,9 +4,36 @@
 #include <util/FileUtil.h>
 #include <manager/TexToGoFileMgr.h>
 #include <manager/TextureMgr.h>
+#include <algorithm>
 
 namespace application::gl
 {
+	namespace
+	{
+		bool IsLikelyAlbedoTextureName(const std::string& TextureName)
+		{
+			std::string Lower = TextureName;
+			std::transform(Lower.begin(), Lower.end(), Lower.begin(), [](unsigned char C)
+				{
+					return static_cast<char>(std::tolower(C));
+				});
+
+			// Typical Nintendo naming for base color maps in this project.
+			return Lower.find("alb") != std::string::npos || Lower.find("albedo") != std::string::npos || Lower.find("basecolor") != std::string::npos;
+		}
+
+		application::file::game::texture::TexToGoFile* ResolveTexToGoByName(application::file::game::bfres::BfresFile* BfresFile, const std::string& TextureName)
+		{
+			const std::string Path = (BfresFile->mTexDir == "" ? application::util::FileUtil::GetRomFSFilePath("TexToGo/" + TextureName + ".txtg") : (BfresFile->mTexDir + "/" + TextureName + ".txtg"));
+			if (!application::util::FileUtil::FileExists(Path))
+			{
+				return nullptr;
+			}
+
+			return application::manager::TexToGoFileMgr::GetTexture(Path, application::manager::TexToGoFileMgr::AccesMode::PATH);
+		}
+	}
+
 	std::unordered_map<application::file::game::bfres::BfresFile::BfresAttribFormat, application::gl::BfresRenderer::FormatInfo> BfresRenderer::gFormatList =
 	{
 		{ application::file::game::bfres::BfresFile::BfresAttribFormat::Format_32_32_32_32_Single, {4, false, GL_FLOAT} },
@@ -79,6 +106,7 @@ namespace application::gl
 			for (auto& [ShapeKey, ShapeVal] : Model.Shapes.mNodes)
 			{
 				application::file::game::bfres::BfresFile::Shape& Shape = ShapeVal.mValue;
+				mMaterials[ShapeIndex].mMaterialName = Model.Materials.GetByIndex(Shape.MaterialIndex).mValue.Name;
 
 				if (Model.Materials.GetByIndex(Shape.MaterialIndex).mValue.Textures.empty())
 				{
@@ -197,11 +225,48 @@ namespace application::gl
 
 				if (AlbedoCount > 0)
 				{
+					mMaterials[ShapeIndex].mAlbedoTexToGoFile = Textures[AlbedoCount - 1];
 					mMaterials[ShapeIndex].mAlbedoTexture = application::manager::TextureMgr::GetTexToGoSurfaceTexture(&(Textures[AlbedoCount - 1]->GetSurface(mMaterials[ShapeIndex].mTextureArrayIndex)), GL_TEXTURE0, false, GL_NEAREST);
 				}
 				else
 				{
 					LoadFallbackTexture(mMaterials[ShapeIndex]);
+				}
+
+				// Collect all material texture channels as replacement candidates.
+				// Model variation FMABs often swap bound texture channels rather than texture array layers.
+				for (const std::string& TextureName : Model.Materials.GetByIndex(Shape.MaterialIndex).mValue.Textures)
+				{
+					if (!IsLikelyAlbedoTextureName(TextureName))
+					{
+						continue;
+					}
+
+					const std::string Path = (mBfresFile->mTexDir == "" ? application::util::FileUtil::GetRomFSFilePath("TexToGo/" + TextureName + ".txtg") : (mBfresFile->mTexDir + "/" + TextureName + ".txtg"));
+					if (!application::util::FileUtil::FileExists(Path))
+					{
+						continue;
+					}
+
+					application::file::game::texture::TexToGoFile* Candidate = application::manager::TexToGoFileMgr::GetTexture(Path, application::manager::TexToGoFileMgr::AccesMode::PATH);
+					if (std::find(mMaterials[ShapeIndex].mTextureCandidates.begin(), mMaterials[ShapeIndex].mTextureCandidates.end(), Candidate) == mMaterials[ShapeIndex].mTextureCandidates.end())
+					{
+						mMaterials[ShapeIndex].mTextureCandidates.push_back(Candidate);
+					}
+				}
+
+				if (mMaterials[ShapeIndex].mAlbedoTexToGoFile != nullptr)
+				{
+					const auto Iter = std::find(mMaterials[ShapeIndex].mTextureCandidates.begin(), mMaterials[ShapeIndex].mTextureCandidates.end(), mMaterials[ShapeIndex].mAlbedoTexToGoFile);
+					if (Iter != mMaterials[ShapeIndex].mTextureCandidates.end())
+					{
+						mMaterials[ShapeIndex].mDefaultTextureCandidateIndex = static_cast<uint16_t>(std::distance(mMaterials[ShapeIndex].mTextureCandidates.begin(), Iter));
+					}
+					else
+					{
+						mMaterials[ShapeIndex].mTextureCandidates.push_back(mMaterials[ShapeIndex].mAlbedoTexToGoFile);
+						mMaterials[ShapeIndex].mDefaultTextureCandidateIndex = static_cast<uint16_t>(mMaterials[ShapeIndex].mTextureCandidates.size() - 1);
+					}
 				}
 
 				mMaterials[ShapeIndex].mIndexFormat = Shape.Meshes[0].IndexFormat == application::file::game::bfres::BfresFile::BfresIndexFormat::UInt32 ? GL_UNSIGNED_INT : (Shape.Meshes[0].IndexFormat == application::file::game::bfres::BfresFile::BfresIndexFormat::UInt16 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_BYTE);
@@ -282,7 +347,7 @@ namespace application::gl
 		}
 	}
 
-	void BfresRenderer::Draw(std::vector<glm::mat4>& ModelMatrices)
+	void BfresRenderer::Draw(std::vector<glm::mat4>& ModelMatrices, int32_t TextureArrayIndexOverride, const std::unordered_map<std::string, std::string>* MaterialAlbedoTextureOverrides)
 	{
 		mInstanceMatrix.SetData<glm::mat4>(ModelMatrices);
 
@@ -293,7 +358,29 @@ namespace application::gl
 			mShapeVAOs[i].Enable();
 			mShapeVAOs[i].Use();
 
-			mMaterials[i].mAlbedoTexture->Bind();
+			application::gl::Texture* AlbedoTexture = mMaterials[i].mAlbedoTexture;
+			application::file::game::texture::TexToGoFile* SelectedTexToGo = mMaterials[i].mAlbedoTexToGoFile;
+			if (MaterialAlbedoTextureOverrides != nullptr)
+			{
+				if (const auto OverrideIter = MaterialAlbedoTextureOverrides->find(mMaterials[i].mMaterialName); OverrideIter != MaterialAlbedoTextureOverrides->end())
+				{
+					if (application::file::game::texture::TexToGoFile* OverrideTex = ResolveTexToGoByName(mBfresFile, OverrideIter->second); OverrideTex != nullptr)
+					{
+						SelectedTexToGo = OverrideTex;
+					}
+				}
+			}
+			if (TextureArrayIndexOverride >= 0 && mMaterials[i].mTextureCandidates.size() > 1)
+			{
+				const size_t CandidateIndex = std::min(static_cast<size_t>(TextureArrayIndexOverride), mMaterials[i].mTextureCandidates.size() - 1);
+				SelectedTexToGo = mMaterials[i].mTextureCandidates[CandidateIndex];
+			}
+
+			if (SelectedTexToGo != nullptr)
+			{
+				AlbedoTexture = application::manager::TextureMgr::GetTexToGoSurfaceTexture(&SelectedTexToGo->GetSurface(mMaterials[i].mTextureArrayIndex), GL_TEXTURE0, false, GL_NEAREST);
+			}
+			AlbedoTexture->Bind();
 
 			glDrawElementsInstanced(GL_TRIANGLES, mIndexBuffers[i].second, mMaterials[i].mIndexFormat, 0, ModelMatrices.size());
 		}
@@ -303,7 +390,29 @@ namespace application::gl
 			mShapeVAOs[i].Enable();
 			mShapeVAOs[i].Use();
 
-			mMaterials[i].mAlbedoTexture->Bind();
+			application::gl::Texture* AlbedoTexture = mMaterials[i].mAlbedoTexture;
+			application::file::game::texture::TexToGoFile* SelectedTexToGo = mMaterials[i].mAlbedoTexToGoFile;
+			if (MaterialAlbedoTextureOverrides != nullptr)
+			{
+				if (const auto OverrideIter = MaterialAlbedoTextureOverrides->find(mMaterials[i].mMaterialName); OverrideIter != MaterialAlbedoTextureOverrides->end())
+				{
+					if (application::file::game::texture::TexToGoFile* OverrideTex = ResolveTexToGoByName(mBfresFile, OverrideIter->second); OverrideTex != nullptr)
+					{
+						SelectedTexToGo = OverrideTex;
+					}
+				}
+			}
+			if (TextureArrayIndexOverride >= 0 && mMaterials[i].mTextureCandidates.size() > 1)
+			{
+				const size_t CandidateIndex = std::min(static_cast<size_t>(TextureArrayIndexOverride), mMaterials[i].mTextureCandidates.size() - 1);
+				SelectedTexToGo = mMaterials[i].mTextureCandidates[CandidateIndex];
+			}
+
+			if (SelectedTexToGo != nullptr)
+			{
+				AlbedoTexture = application::manager::TextureMgr::GetTexToGoSurfaceTexture(&SelectedTexToGo->GetSurface(mMaterials[i].mTextureArrayIndex), GL_TEXTURE0, false, GL_NEAREST);
+			}
+			AlbedoTexture->Bind();
 
 			glDrawElementsInstanced(GL_TRIANGLES, mIndexBuffers[i].second, mMaterials[i].mIndexFormat, 0, ModelMatrices.size());
 		}

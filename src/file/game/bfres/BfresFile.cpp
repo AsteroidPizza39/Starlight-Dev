@@ -879,7 +879,15 @@ namespace application::file::game::bfres
             }
             else
             {
-                glm::mat4& Matrix = ModelSkeleton.Bones.GetByIndex(0).mValue.WorldMatrix;
+                // Rigid (non-skinned) shapes are bound to Shape.BoneIndex, not always bone 0.
+                // Using bone 0 here can offset models whose local origin is authored on another bone.
+                uint32_t RigidBoneIndex = 0;
+                if (BfresShape.mValue.BoneIndex >= 0)
+                {
+                    RigidBoneIndex = static_cast<uint32_t>(BfresShape.mValue.BoneIndex);
+                }
+
+                glm::mat4& Matrix = ModelSkeleton.Bones.GetByIndex(RigidBoneIndex).mValue.WorldMatrix;
                 for (size_t i = 0; i < BfresShape.mValue.Vertices.size(); i++)
                 {
                     BfresShape.mValue.Vertices[i].w = 1.0f;

@@ -13,6 +13,7 @@
 #include <manager/ProjectMgr.h>
 #include <util/portable-file-dialogs.h>
 #include <util/Math.h>
+#include <util/Logger.h>
 #include <util/GitManager.h>
 #include <tool/SceneCreator.h>
 #include <tool/scene/static_compound/StaticCompoundImplementationSingleScene.h>
@@ -41,6 +42,33 @@ namespace
 
 namespace application::rendering::map_editor
 {
+    void UIMapEditor::LogTexturePatternDebug(const application::game::Scene::BancEntityRenderInfo& RenderInfo) const
+    {
+        const application::game::BancEntity* Entity = RenderInfo.mEntity;
+        if (Entity == nullptr)
+        {
+            return;
+        }
+
+        application::util::Logger::Info("TexturePatternDebug", "Actor=%s Hash=%llu SRTHash=%u", Entity->mGyml.c_str(), static_cast<unsigned long long>(Entity->mHash), Entity->mSRTHash);
+        application::util::Logger::Info("TexturePatternDebug", "ModelProject=%s Fmab=%s Frame=%d OverrideKey=%s",
+            Entity->mTexturePatternModelProjectName.c_str(),
+            Entity->mTexturePatternAnimationName.c_str(),
+            Entity->mTexturePatternFrame,
+            Entity->mTexturePatternOverrideKey.c_str());
+
+        if (Entity->mTexturePatternAlbedoOverridesByMaterial.empty())
+        {
+            application::util::Logger::Warning("TexturePatternDebug", "No material albedo overrides were resolved for selected actor");
+            return;
+        }
+
+        for (const auto& [MaterialName, TextureName] : Entity->mTexturePatternAlbedoOverridesByMaterial)
+        {
+            application::util::Logger::Info("TexturePatternDebug", "Override %s -> %s", MaterialName.c_str(), TextureName.c_str());
+        }
+    }
+
     application::gl::Shader* UIMapEditor::gInstancedShader = nullptr;
     application::gl::Shader* UIMapEditor::gPickingShader = nullptr;
     application::gl::Shader* UIMapEditor::gSelectedShader = nullptr;
@@ -703,6 +731,7 @@ namespace application::rendering::map_editor
         }
 
         ImGui::Checkbox("Generate physics hashes", &mScene.mGeneratePhysicsHashes);
+        ImGui::SliderFloat("Camera FOV", &mCameraFovDegrees, 20.0f, 120.0f, "%.1f deg");
 
         if (ImGui::Button("Regenerate scene draw list"))
             mScene.GenerateDrawList();
@@ -1113,7 +1142,13 @@ namespace application::rendering::map_editor
             ModelMatrix = glm::rotate(ModelMatrix, glm::radians(ActorRotate.x), glm::vec3(1.0, 0.0f, 0.0f));
             ModelMatrix = glm::scale(ModelMatrix, ActorScale);
 
-            LocalActor.mBfresRenderer->Draw(InstanceMatrix);
+            LocalActor.mBfresRenderer->Draw(InstanceMatrix, LocalActor.mTexturePatternFrame, &LocalActor.mTexturePatternAlbedoOverridesByMaterial);
+            if (LocalActor.mHornBfresRenderer != nullptr && LocalActor.mHasHornAttachment)
+            {
+                std::vector<glm::mat4> HornInstanceMatrix(1);
+                HornInstanceMatrix[0] = ModelMatrix * LocalActor.mHornAttachmentMatrix * LocalActor.mHornModelCorrectionMatrix;
+                LocalActor.mHornBfresRenderer->Draw(HornInstanceMatrix);
+            }
         }
 
         glDepthMask(GL_TRUE);
@@ -1564,6 +1599,14 @@ namespace application::rendering::map_editor
             application::game::Scene::BancEntityRenderInfo* RenderInfo = GetSelectedActor();
             bool SyncBancEntity = false;
 
+            if (RenderInfo != nullptr && (!mHasTexturePatternDebugSelection || mLastTexturePatternDebugHash != RenderInfo->mEntity->mHash || mLastTexturePatternDebugSRTHash != RenderInfo->mEntity->mSRTHash))
+            {
+                mHasTexturePatternDebugSelection = true;
+                mLastTexturePatternDebugHash = RenderInfo->mEntity->mHash;
+                mLastTexturePatternDebugSRTHash = RenderInfo->mEntity->mSRTHash;
+                LogTexturePatternDebug(*RenderInfo);
+            }
+
             if (ImGui::BeginTable("GeneralTable", 2, ImGuiTableFlags_BordersInnerV))
             {
                 ImGui::TableSetupColumn("Key", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("SRTHash").x + ImGui::GetStyle().IndentSpacing);
@@ -1645,6 +1688,11 @@ namespace application::rendering::map_editor
                 ImGui::EndTable();
             }
 
+            ImGui::Separator();
+            if (ImGui::Button("Print Texture Pattern Debug"))
+            {
+                LogTexturePatternDebug(*RenderInfo);
+            }
             ImGui::Separator();
             ImGui::Columns(3);
             ImGui::AlignTextToFramePadding();
@@ -2619,7 +2667,7 @@ namespace application::rendering::map_editor
 
             ImGui::Text("Needs physics: %s", RenderInfo->mEntity->mActorPack->mNeedsPhysicsHash ? "true" : "false");
             ImGui::Text("Check for hash generation: %s", RenderInfo->mEntity->mCheckForHashGeneration ? "true" : "false");
-            ImGui::Text("Distance: %f", application::util::Math::CalculateScreenRadius(RenderInfo->mTranslate, RenderInfo->mEntity->mBfresRenderer->mSphereBoundingBoxRadius, mCamera.mPosition, 45.0f, mCamera.mHeight));
+            ImGui::Text("Distance: %f", application::util::Math::CalculateScreenRadius(RenderInfo->mTranslate, RenderInfo->mEntity->mBfresRenderer->mSphereBoundingBoxRadius, mCamera.mPosition, mCameraFovDegrees, mCamera.mHeight));
 
             if (SyncBancEntity)
                 mScene.SyncBancEntity(RenderInfo);
@@ -2642,6 +2690,29 @@ namespace application::rendering::map_editor
         return false;
     }
 
+    glm::mat4 UIMapEditor::ComposeEntityModelMatrix(const application::game::Scene::BancEntityRenderInfo& RenderInfo) const
+    {
+        glm::mat4 ModelMatrix(1.0f);
+        ModelMatrix = glm::translate(ModelMatrix, RenderInfo.mTranslate);
+        ModelMatrix = glm::rotate(ModelMatrix, glm::radians(RenderInfo.mRotate.z), glm::vec3(0.0f, 0.0f, 1.0f));
+        ModelMatrix = glm::rotate(ModelMatrix, glm::radians(RenderInfo.mRotate.y), glm::vec3(0.0f, 1.0f, 0.0f));
+        ModelMatrix = glm::rotate(ModelMatrix, glm::radians(RenderInfo.mRotate.x), glm::vec3(1.0f, 0.0f, 0.0f));
+        ModelMatrix = glm::scale(ModelMatrix, RenderInfo.mScale);
+        return ModelMatrix;
+    }
+
+    void UIMapEditor::DrawHornAttachment(const application::game::Scene::BancEntityRenderInfo& RenderInfo, const glm::mat4& BaseModelMatrix)
+    {
+        if (RenderInfo.mEntity->mHornBfresRenderer == nullptr || !RenderInfo.mEntity->mHasHornAttachment)
+        {
+            return;
+        }
+
+        std::vector<glm::mat4> HornInstanceMatrix(1);
+        HornInstanceMatrix[0] = BaseModelMatrix * RenderInfo.mEntity->mHornAttachmentMatrix * RenderInfo.mEntity->mHornModelCorrectionMatrix;
+        RenderInfo.mEntity->mHornBfresRenderer->Draw(HornInstanceMatrix);
+    }
+
     void UIMapEditor::DrawInstancedBancEntityRenderInfo(std::vector<application::game::Scene::BancEntityRenderInfo>& Entities)
     {
         if (Entities.empty()) return;
@@ -2649,6 +2720,9 @@ namespace application::rendering::map_editor
         if (IsBancEntityRenderInfoCulled(Entities[0])) return;
 
         std::vector<glm::mat4> InstanceMatrices(Entities.size());
+        std::vector<int32_t> PatternFrames(Entities.size(), -1);
+        std::vector<std::string> PatternKeys(Entities.size(), "");
+        std::vector<application::game::BancEntity*> PatternEntities(Entities.size(), nullptr);
 
         application::game::Scene::BancEntityRenderInfo* SelectedActor = GetSelectedActor();
 
@@ -2664,7 +2738,7 @@ namespace application::rendering::map_editor
                         return Actor.mHash == RenderInfo.mEntity->mHash && Actor.mSRTHash == RenderInfo.mEntity->mSRTHash;
                     });
 
-            RenderInfo.mSphereScreenSize = application::util::Math::CalculateScreenRadius(RenderInfo.mTranslate, RenderInfo.mEntity->mBfresRenderer->mSphereBoundingBoxRadius, mCamera.mPosition, 45.0f, mCamera.mHeight);
+            RenderInfo.mSphereScreenSize = application::util::Math::CalculateScreenRadius(RenderInfo.mTranslate, RenderInfo.mEntity->mBfresRenderer->mSphereBoundingBoxRadius, mCamera.mPosition, mCameraFovDegrees, mCamera.mHeight);
             RenderInfo.mSphereScreenSize *= MATH_MAX(RenderInfo.mScale.x, MATH_MAX(RenderInfo.mScale.y, RenderInfo.mScale.z));
 
             if ((SelectedActor != nullptr && Entities[i].mMergedActorParent == GetSelectedActor()->mEntity) || mSelectedActorIndex == Entities[i].mEntityIndex || IsTemplateBuilderActor || (!RenderInfo.mEntity->mBfresRenderer->mIsSystemModelTransparent && RenderInfo.mSphereScreenSize < 5.0f) || (!mRenderSettings.mRenderMergedActors && RenderInfo.mMergedActorParent != nullptr) || !mFrustum.SphereInFrustum(RenderInfo.mTranslate.x, RenderInfo.mTranslate.y, RenderInfo.mTranslate.z, RenderInfo.mEntity->mBfresRenderer->mBfresFile->Models.GetByIndex(0).mValue.BoundingBoxSphereRadius * std::fmax(std::fmax(RenderInfo.mScale.x, RenderInfo.mScale.y), RenderInfo.mScale.z)))
@@ -2673,21 +2747,63 @@ namespace application::rendering::map_editor
                 continue;
             }
 
-            InstanceMatrices[i - Shrinking] = glm::mat4(1.0f); // Identity matrix
-
-            InstanceMatrices[i - Shrinking] = glm::translate(InstanceMatrices[i - Shrinking], RenderInfo.mTranslate);
-
-            InstanceMatrices[i - Shrinking] = glm::rotate(InstanceMatrices[i - Shrinking], glm::radians(RenderInfo.mRotate.z), glm::vec3(0.0, 0.0f, 1.0));
-            InstanceMatrices[i - Shrinking] = glm::rotate(InstanceMatrices[i - Shrinking], glm::radians(RenderInfo.mRotate.y), glm::vec3(0.0f, 1.0, 0.0));
-            InstanceMatrices[i - Shrinking] = glm::rotate(InstanceMatrices[i - Shrinking], glm::radians(RenderInfo.mRotate.x), glm::vec3(1.0, 0.0f, 0.0));
-
-            InstanceMatrices[i - Shrinking] = glm::scale(InstanceMatrices[i - Shrinking], RenderInfo.mScale);
+            const size_t OutputIndex = i - Shrinking;
+            InstanceMatrices[OutputIndex] = ComposeEntityModelMatrix(RenderInfo);
+            PatternFrames[OutputIndex] = RenderInfo.mEntity->mTexturePatternFrame;
+            PatternKeys[OutputIndex] = RenderInfo.mEntity->mTexturePatternOverrideKey;
+            PatternEntities[OutputIndex] = RenderInfo.mEntity;
         }
 
         if (Shrinking > 0)
+        {
             InstanceMatrices.resize(InstanceMatrices.size() - Shrinking);
+            PatternFrames.resize(PatternFrames.size() - Shrinking);
+            PatternKeys.resize(PatternKeys.size() - Shrinking);
+            PatternEntities.resize(PatternEntities.size() - Shrinking);
+        }
 
-        Entities[0].mEntity->mBfresRenderer->Draw(InstanceMatrices);
+        struct PatternGroup
+        {
+            std::vector<glm::mat4> mMatrices;
+            application::game::BancEntity* mEntity = nullptr;
+            int32_t mFrame = -1;
+        };
+
+        std::unordered_map<std::string, PatternGroup> MatrixGroupsByPattern;
+        MatrixGroupsByPattern.reserve(8);
+        for (size_t i = 0; i < InstanceMatrices.size(); i++)
+        {
+            const std::string GroupKey = std::to_string(PatternFrames[i]) + "|" + PatternKeys[i];
+            PatternGroup& Group = MatrixGroupsByPattern[GroupKey];
+            Group.mMatrices.push_back(InstanceMatrices[i]);
+            Group.mFrame = PatternFrames[i];
+            Group.mEntity = PatternEntities[i];
+        }
+
+        for (auto& [Key, Group] : MatrixGroupsByPattern)
+        {
+            if (Group.mEntity != nullptr)
+            {
+                Group.mEntity->mBfresRenderer->Draw(Group.mMatrices, Group.mFrame, &Group.mEntity->mTexturePatternAlbedoOverridesByMaterial);
+            }
+        }
+
+        for (application::game::Scene::BancEntityRenderInfo& RenderInfo : Entities)
+        {
+            const bool IsTemplateBuilderActor = !mTemplatePreviewState.mActive &&
+                std::any_of(mTemplateBuilderActors.begin(), mTemplateBuilderActors.end(),
+                    [&RenderInfo](const application::game::BancEntity& Actor)
+                    {
+                        return Actor.mHash == RenderInfo.mEntity->mHash && Actor.mSRTHash == RenderInfo.mEntity->mSRTHash;
+                    });
+
+            if ((SelectedActor != nullptr && RenderInfo.mMergedActorParent == SelectedActor->mEntity) || mSelectedActorIndex == RenderInfo.mEntityIndex || IsTemplateBuilderActor || (!RenderInfo.mEntity->mBfresRenderer->mIsSystemModelTransparent && RenderInfo.mSphereScreenSize < 5.0f) || (!mRenderSettings.mRenderMergedActors && RenderInfo.mMergedActorParent != nullptr) || !mFrustum.SphereInFrustum(RenderInfo.mTranslate.x, RenderInfo.mTranslate.y, RenderInfo.mTranslate.z, RenderInfo.mEntity->mBfresRenderer->mBfresFile->Models.GetByIndex(0).mValue.BoundingBoxSphereRadius * std::fmax(std::fmax(RenderInfo.mScale.x, RenderInfo.mScale.y), RenderInfo.mScale.z)))
+            {
+                continue;
+            }
+
+            DrawHornAttachment(RenderInfo, ComposeEntityModelMatrix(RenderInfo));
+        }
     }
 
     void UIMapEditor::DrawBancEntityRenderInfo(application::game::Scene::BancEntityRenderInfo& RenderInfo)
@@ -2695,17 +2811,10 @@ namespace application::rendering::map_editor
         std::vector<glm::mat4> InstanceMatrix(1);
 
         glm::mat4& GLMModel = InstanceMatrix[0];
-        GLMModel = glm::mat4(1.0f); // Identity matrix
+        GLMModel = ComposeEntityModelMatrix(RenderInfo);
 
-        GLMModel = glm::translate(GLMModel, RenderInfo.mTranslate);
-
-        GLMModel = glm::rotate(GLMModel, glm::radians(RenderInfo.mRotate.z), glm::vec3(0.0, 0.0f, 1.0));
-        GLMModel = glm::rotate(GLMModel, glm::radians(RenderInfo.mRotate.y), glm::vec3(0.0f, 1.0, 0.0));
-        GLMModel = glm::rotate(GLMModel, glm::radians(RenderInfo.mRotate.x), glm::vec3(1.0, 0.0f, 0.0));
-
-        GLMModel = glm::scale(GLMModel, RenderInfo.mScale);
-
-        RenderInfo.mEntity->mBfresRenderer->Draw(InstanceMatrix);
+        RenderInfo.mEntity->mBfresRenderer->Draw(InstanceMatrix, RenderInfo.mEntity->mTexturePatternFrame, &RenderInfo.mEntity->mTexturePatternAlbedoOverridesByMaterial);
+        DrawHornAttachment(RenderInfo, GLMModel);
 
         //Render merged actors if any
         if (RenderInfo.mEntity->mMergedActorChildren != nullptr && !RenderInfo.mEntity->mMergedActorChildren->empty())
@@ -2735,11 +2844,13 @@ namespace application::rendering::map_editor
     void UIMapEditor::DeselectActor()
     {
         mSelectedActorIndex = -1;
+        mHasTexturePatternDebugSelection = false;
     }
 
     void UIMapEditor::SelectActor(int32_t NewIndex)
     {
         mSelectedActorIndex = NewIndex;
+        mHasTexturePatternDebugSelection = false;
 
         mPropertiesWindowInfo.mSetDynamicColumnWidth = true;
         mPropertiesWindowInfo.mSetExternalParametersColumnWidth = true;
@@ -2814,17 +2925,10 @@ namespace application::rendering::map_editor
                     std::vector<glm::mat4> InstanceMatrix(1);
 
                     glm::mat4& GLMModel = InstanceMatrix[0];
-                    GLMModel = glm::mat4(1.0f); // Identity matrix
+                    GLMModel = ComposeEntityModelMatrix(Info);
 
-                    GLMModel = glm::translate(GLMModel, Info.mTranslate);
-
-                    GLMModel = glm::rotate(GLMModel, glm::radians(Info.mRotate.z), glm::vec3(0.0, 0.0f, 1.0));
-                    GLMModel = glm::rotate(GLMModel, glm::radians(Info.mRotate.y), glm::vec3(0.0f, 1.0, 0.0));
-                    GLMModel = glm::rotate(GLMModel, glm::radians(Info.mRotate.x), glm::vec3(1.0, 0.0f, 0.0));
-
-                    GLMModel = glm::scale(GLMModel, Info.mScale);
-
-                    Info.mEntity->mBfresRenderer->Draw(InstanceMatrix);
+                    Info.mEntity->mBfresRenderer->Draw(InstanceMatrix, Info.mEntity->mTexturePatternFrame, &Info.mEntity->mTexturePatternAlbedoOverridesByMaterial);
+                    DrawHornAttachment(Info, GLMModel);
                 }
             }
 
@@ -3103,7 +3207,7 @@ namespace application::rendering::map_editor
 
         ImVec2 WindowPos = ImGui::GetWindowPos();
         mCamera.Inputs(ImGui::GetIO().Framerate, glm::vec2(WindowPos.x, WindowPos.y));
-        mCamera.UpdateMatrix(45.0f, 0.1f, 30000.0f);
+        mCamera.UpdateMatrix(mCameraFovDegrees, 0.1f, 30000.0f);
 
         gPickingShader->Bind();
         mCamera.Matrix(gPickingShader, "camMatrix");

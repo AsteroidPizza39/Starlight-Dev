@@ -6,6 +6,7 @@
 #include <gl/BufferObject.h>
 #include <gl/Texture.h>
 #include <gl/VertexArrayObject.h>
+#include <file/game/texture/TexToGoFile.h>
 
 namespace application::gl
 {
@@ -31,11 +32,15 @@ namespace application::gl
 			bool mEnableAlphaTest = false;
 			RenderStateMode mRenderStateMode = RenderStateMode::OPAQUE;
 			uint16_t mTextureArrayIndex = 0;
+			std::string mMaterialName;
 
 			GLenum mRenderStateDisplayFace = GL_NONE;
 			GLenum mIndexFormat = GL_UNSIGNED_INT;
 
 			application::gl::Texture* mAlbedoTexture = nullptr;
+			application::file::game::texture::TexToGoFile* mAlbedoTexToGoFile = nullptr;
+			std::vector<application::file::game::texture::TexToGoFile*> mTextureCandidates;
+			uint16_t mDefaultTextureCandidateIndex = 0;
 		};
 
 		struct DrawElementsIndirectCommand
@@ -55,7 +60,7 @@ namespace application::gl
 
 		void LoadFallbackTexture(Material& Material);
 		void Initialize(application::file::game::bfres::BfresFile* BfresFile);
-		void Draw(std::vector<glm::mat4>& ModelMatrices);
+		void Draw(std::vector<glm::mat4>& ModelMatrices, int32_t TextureArrayIndexOverride = -1, const std::unordered_map<std::string, std::string>* MaterialAlbedoTextureOverrides = nullptr);
 		void Delete();
 
 		application::file::game::bfres::BfresFile* mBfresFile = nullptr;

@@ -13,6 +13,9 @@ namespace application::game::actor_component
 		std::optional<std::string> mModelProjectName;
 		std::optional<std::string> mFmdbName;
 		std::optional<bool> mEnableModelBake = false;
+		std::optional<std::string> mModelVariationFmabName;
+		std::optional<float> mModelVariationFmabFrame;
+		std::optional<std::string> mModelVariationFmabPath;
 
 		ActorComponentModelInfo(application::game::ActorPack& ActorPack);
 

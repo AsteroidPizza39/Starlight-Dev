@@ -14,6 +14,7 @@
 #include <tool/scene/static_compound/StaticCompoundImplementationFieldScene.h>
 #include <glm/geometric.hpp>
 #include <algorithm>
+#include <unordered_map>
 
 namespace application::play
 {
@@ -802,6 +803,9 @@ namespace application::play
         if (IsBancEntityRenderInfoCulled(Entities[0])) return;
 
         std::vector<glm::mat4> InstanceMatrices(Entities.size());
+        std::vector<int32_t> PatternFrames(Entities.size(), -1);
+        std::vector<std::string> PatternKeys(Entities.size(), "");
+        std::vector<application::game::BancEntity*> PatternEntities(Entities.size(), nullptr);
 
         int Shrinking = 0;
         for (size_t i = 0; i < Entities.size(); i++)
@@ -844,21 +848,53 @@ namespace application::play
                 mScene.SyncBancEntity(&RenderInfo);
             }
 
-            InstanceMatrices[i - Shrinking] = glm::mat4(1.0f); // Identity matrix
+            const size_t OutputIndex = i - Shrinking;
+            InstanceMatrices[OutputIndex] = glm::mat4(1.0f); // Identity matrix
 
-            InstanceMatrices[i - Shrinking] = glm::translate(InstanceMatrices[i - Shrinking], RenderInfo.mTranslate);
+            InstanceMatrices[OutputIndex] = glm::translate(InstanceMatrices[OutputIndex], RenderInfo.mTranslate);
 
-            InstanceMatrices[i - Shrinking] = glm::rotate(InstanceMatrices[i - Shrinking], glm::radians(RenderInfo.mRotate.z), glm::vec3(0.0, 0.0f, 1.0));
-            InstanceMatrices[i - Shrinking] = glm::rotate(InstanceMatrices[i - Shrinking], glm::radians(RenderInfo.mRotate.y), glm::vec3(0.0f, 1.0, 0.0));
-            InstanceMatrices[i - Shrinking] = glm::rotate(InstanceMatrices[i - Shrinking], glm::radians(RenderInfo.mRotate.x), glm::vec3(1.0, 0.0f, 0.0));
+            InstanceMatrices[OutputIndex] = glm::rotate(InstanceMatrices[OutputIndex], glm::radians(RenderInfo.mRotate.z), glm::vec3(0.0, 0.0f, 1.0));
+            InstanceMatrices[OutputIndex] = glm::rotate(InstanceMatrices[OutputIndex], glm::radians(RenderInfo.mRotate.y), glm::vec3(0.0f, 1.0, 0.0));
+            InstanceMatrices[OutputIndex] = glm::rotate(InstanceMatrices[OutputIndex], glm::radians(RenderInfo.mRotate.x), glm::vec3(1.0, 0.0f, 0.0));
 
-            InstanceMatrices[i - Shrinking] = glm::scale(InstanceMatrices[i - Shrinking], RenderInfo.mScale);
+            InstanceMatrices[OutputIndex] = glm::scale(InstanceMatrices[OutputIndex], RenderInfo.mScale);
+            PatternFrames[OutputIndex] = RenderInfo.mEntity->mTexturePatternFrame;
+            PatternKeys[OutputIndex] = RenderInfo.mEntity->mTexturePatternOverrideKey;
+            PatternEntities[OutputIndex] = RenderInfo.mEntity;
         }
 
         if (Shrinking > 0)
+        {
             InstanceMatrices.resize(InstanceMatrices.size() - Shrinking);
+            PatternFrames.resize(PatternFrames.size() - Shrinking);
+            PatternKeys.resize(PatternKeys.size() - Shrinking);
+            PatternEntities.resize(PatternEntities.size() - Shrinking);
+        }
 
-        Entities[0].mEntity->mBfresRenderer->Draw(InstanceMatrices);
+        struct PatternGroup
+        {
+            std::vector<glm::mat4> mMatrices;
+            application::game::BancEntity* mEntity = nullptr;
+            int32_t mFrame = -1;
+        };
+        std::unordered_map<std::string, PatternGroup> MatrixGroupsByPattern;
+        MatrixGroupsByPattern.reserve(8);
+        for (size_t i = 0; i < InstanceMatrices.size(); i++)
+        {
+            const std::string GroupKey = std::to_string(PatternFrames[i]) + "|" + PatternKeys[i];
+            PatternGroup& Group = MatrixGroupsByPattern[GroupKey];
+            Group.mMatrices.push_back(InstanceMatrices[i]);
+            Group.mEntity = PatternEntities[i];
+            Group.mFrame = PatternFrames[i];
+        }
+
+        for (auto& [Key, Group] : MatrixGroupsByPattern)
+        {
+            if (Group.mEntity != nullptr)
+            {
+                Group.mEntity->mBfresRenderer->Draw(Group.mMatrices, Group.mFrame, &Group.mEntity->mTexturePatternAlbedoOverridesByMaterial);
+            }
+        }
     }
 
 	void PlaySession::Render()

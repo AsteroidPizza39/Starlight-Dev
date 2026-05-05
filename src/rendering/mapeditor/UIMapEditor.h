@@ -102,6 +102,9 @@ namespace application::rendering::map_editor
 		//void DrawInstancedBancEntity(std::vector<application::game::BancEntity*>& Entities, application::gl::Shader* Shader);
 		void DrawBancEntityRenderInfo(application::game::Scene::BancEntityRenderInfo& RenderInfo);
 		void DrawInstancedBancEntityRenderInfo(std::vector<application::game::Scene::BancEntityRenderInfo>& Entities);
+		glm::mat4 ComposeEntityModelMatrix(const application::game::Scene::BancEntityRenderInfo& RenderInfo) const;
+		void DrawHornAttachment(const application::game::Scene::BancEntityRenderInfo& RenderInfo, const glm::mat4& BaseModelMatrix);
+		void LogTexturePatternDebug(const application::game::Scene::BancEntityRenderInfo& RenderInfo) const;
 
 		void DrawDynamicTypePropertiesHeader(const std::string& Title, std::map<std::string, std::variant<std::string, bool, int32_t, int64_t, uint32_t, uint64_t, float, glm::vec3>>& Map, bool& SyncBancEntity, bool& UpdateColumnWidth, ImGuiTreeNodeFlags Flags, int IndentationLevel = 1);
 		void DrawDynamicTypePropertiesSeparator(const std::string& Title, std::map<std::string, std::variant<std::string, bool, int32_t, int64_t, uint32_t, uint64_t, float, glm::vec3>>& Map, bool& SyncBancEntity, bool& UpdateColumnWidth, int IndentationLevel = 1);
@@ -131,6 +134,9 @@ namespace application::rendering::map_editor
 		application::gl::Framebuffer* mSceneWindowFramebuffer = nullptr;
 
 		int32_t mSelectedActorIndex = -1;
+		uint64_t mLastTexturePatternDebugHash = 0;
+		uint32_t mLastTexturePatternDebugSRTHash = 0;
+		bool mHasTexturePatternDebugSelection = false;
 
 		float mGuizmoObjectMatrix[16] =
 		{ 
@@ -155,6 +161,7 @@ namespace application::rendering::map_editor
 		application::util::Frustum mFrustum;
 
 		uint16_t mHotkeyBlockFrameCount = 0;
+		float mCameraFovDegrees = 45.0f;
 
 		std::unique_ptr<application::play::PlaySession> mPlaySession = nullptr;
 

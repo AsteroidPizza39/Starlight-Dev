@@ -4,6 +4,7 @@
 #include <string>
 #include <optional>
 #include <variant>
+#include <unordered_map>
 #include <glm/glm.hpp>
 #include <file/game/byml/BymlFile.h>
 #include <game/ActorPack.h>
@@ -211,5 +212,14 @@ namespace application::game
 
 		application::game::ActorPack* mActorPack = nullptr;
 		application::gl::BfresRenderer* mBfresRenderer = nullptr;
+		application::gl::BfresRenderer* mHornBfresRenderer = nullptr;
+		glm::mat4 mHornAttachmentMatrix = glm::mat4(1.0f);
+		glm::mat4 mHornModelCorrectionMatrix = glm::mat4(1.0f);
+		bool mHasHornAttachment = false;
+		int32_t mTexturePatternFrame = -1;
+		std::string mTexturePatternAnimationName = "";
+		std::string mTexturePatternModelProjectName = "";
+		std::string mTexturePatternOverrideKey = "";
+		std::unordered_map<std::string, std::string> mTexturePatternAlbedoOverridesByMaterial;
 	};
 }
