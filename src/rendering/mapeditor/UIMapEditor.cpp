@@ -1149,6 +1149,17 @@ namespace application::rendering::map_editor
                 HornInstanceMatrix[0] = ModelMatrix * LocalActor.mHornAttachmentMatrix * LocalActor.mHornModelCorrectionMatrix;
                 LocalActor.mHornBfresRenderer->Draw(HornInstanceMatrix);
             }
+            for (const application::game::BancEntity::EquipmentAttachment& Attachment : LocalActor.mEquipmentAttachments)
+            {
+                if (!Attachment.mEnabled || Attachment.mBfresRenderer == nullptr)
+                {
+                    continue;
+                }
+
+                std::vector<glm::mat4> AttachmentInstanceMatrix(1);
+                AttachmentInstanceMatrix[0] = ModelMatrix * Attachment.mAttachmentMatrix * Attachment.mModelCorrectionMatrix;
+                Attachment.mBfresRenderer->Draw(AttachmentInstanceMatrix);
+            }
         }
 
         glDepthMask(GL_TRUE);
@@ -1464,9 +1475,9 @@ namespace application::rendering::map_editor
         }
     }
 
-    void UIMapEditor::DrawDynamicTypePropertiesHeader(const std::string& Title, std::map<std::string, std::variant<std::string, bool, int32_t, int64_t, uint32_t, uint64_t, float, glm::vec3>>& Map, bool& SyncBancEntity, bool& UpdateColumnWidth, ImGuiTreeNodeFlags Flags, int IndentationLevel)
+    void UIMapEditor::DrawDynamicTypePropertiesHeader(const std::string& Title, std::map<std::string, std::variant<std::string, bool, int32_t, int64_t, uint32_t, uint64_t, float, glm::vec3>>& Map, bool& SyncBancEntity, bool& UpdateColumnWidth, ImGuiTreeNodeFlags Flags, int IndentationLevel, bool* SyncBancEntityModel)
     {
-        auto OnAddButtonPress = [&Map, &SyncBancEntity]()
+        auto OnAddButtonPress = [&Map, &SyncBancEntity, SyncBancEntityModel]()
             {
                 gAddNewDynamicTypeParameterPopUp.Open([&Map, &SyncBancEntity](application::rendering::popup::PopUpBuilder& Builder)
                     {
@@ -1477,17 +1488,22 @@ namespace application::rendering::map_editor
                         Map.insert({ Key, *reinterpret_cast<std::variant<std::string, bool, int32_t, int64_t, uint32_t, uint64_t, float, glm::vec3>*>(Builder.GetDataStorage(2).mPtr) });
                         SyncBancEntity = true;
                     });
+
+                if (SyncBancEntityModel != nullptr)
+                {
+                    *SyncBancEntityModel = true;
+                }
             };
 
         if (ImGuiExt::CollapsingHeaderWithAddButton(Title.c_str(), Flags, OnAddButtonPress))
         {
-            DrawDynamicTypePropertiesTable(Title, Map, SyncBancEntity, UpdateColumnWidth, IndentationLevel);
+            DrawDynamicTypePropertiesTable(Title, Map, SyncBancEntity, UpdateColumnWidth, IndentationLevel, SyncBancEntityModel);
         }
     }
 
-    void UIMapEditor::DrawDynamicTypePropertiesSeparator(const std::string& Title, std::map<std::string, std::variant<std::string, bool, int32_t, int64_t, uint32_t, uint64_t, float, glm::vec3>>& Map, bool& SyncBancEntity, bool& UpdateColumnWidth, int IndentationLevel)
+    void UIMapEditor::DrawDynamicTypePropertiesSeparator(const std::string& Title, std::map<std::string, std::variant<std::string, bool, int32_t, int64_t, uint32_t, uint64_t, float, glm::vec3>>& Map, bool& SyncBancEntity, bool& UpdateColumnWidth, int IndentationLevel, bool* SyncBancEntityModel)
     {
-        auto OnAddButtonPress = [&Map, &SyncBancEntity]()
+        auto OnAddButtonPress = [&Map, &SyncBancEntity, SyncBancEntityModel]()
             {
                 gAddNewDynamicTypeParameterPopUp.Open([&Map, &SyncBancEntity](application::rendering::popup::PopUpBuilder& Builder)
                     {
@@ -1498,6 +1514,11 @@ namespace application::rendering::map_editor
                         Map.insert({ Key, *reinterpret_cast<std::variant<std::string, bool, int32_t, int64_t, uint32_t, uint64_t, float, glm::vec3>*>(Builder.GetDataStorage(2).mPtr) });
                         SyncBancEntity = true;
                     });
+
+                if (SyncBancEntityModel != nullptr)
+                {
+                    *SyncBancEntityModel = true;
+                }
             };
 
         ImGui::Text(Title.c_str());
@@ -1508,10 +1529,10 @@ namespace application::rendering::map_editor
             OnAddButtonPress();
         }
         ImGui::Separator();
-        DrawDynamicTypePropertiesTable(Title, Map, SyncBancEntity, UpdateColumnWidth, IndentationLevel);
+        DrawDynamicTypePropertiesTable(Title, Map, SyncBancEntity, UpdateColumnWidth, IndentationLevel, SyncBancEntityModel);
     }
 
-    void UIMapEditor::DrawDynamicTypePropertiesTable(const std::string& Title, std::map<std::string, std::variant<std::string, bool, int32_t, int64_t, uint32_t, uint64_t, float, glm::vec3>>& Map, bool& SyncBancEntity, bool& UpdateColumnWidth, int IndentationLevel)
+    void UIMapEditor::DrawDynamicTypePropertiesTable(const std::string& Title, std::map<std::string, std::variant<std::string, bool, int32_t, int64_t, uint32_t, uint64_t, float, glm::vec3>>& Map, bool& SyncBancEntity, bool& UpdateColumnWidth, int IndentationLevel, bool* SyncBancEntityModel)
     {
         if (Map.empty())
             return;
@@ -1564,14 +1585,20 @@ namespace application::rendering::map_editor
 
             ImGui::PushItemWidth(ImGui::GetColumnWidth());
 
-            if (std::holds_alternative<std::string>(Iter->second)) SyncBancEntity |= ImGui::InputText(("##" + Title + Iter->first).c_str(), &std::get<std::string>(Iter->second));
-            if (std::holds_alternative<bool>(Iter->second)) SyncBancEntity |= ImGui::Checkbox(("##" + Title + Iter->first).c_str(), &std::get<bool>(Iter->second));
-            if (std::holds_alternative<int32_t>(Iter->second)) SyncBancEntity |= ImGui::InputScalar(("##" + Title + Iter->first).c_str(), ImGuiDataType_S32, &std::get<int32_t>(Iter->second));
-            if (std::holds_alternative<int64_t>(Iter->second)) SyncBancEntity |= ImGui::InputScalar(("##" + Title + Iter->first).c_str(), ImGuiDataType_S64, &std::get<int64_t>(Iter->second));
-            if (std::holds_alternative<uint32_t>(Iter->second)) SyncBancEntity |= ImGui::InputScalar(("##" + Title + Iter->first).c_str(), ImGuiDataType_U32, &std::get<uint32_t>(Iter->second));
-            if (std::holds_alternative<uint64_t>(Iter->second)) SyncBancEntity |= ImGui::InputScalar(("##" + Title + Iter->first).c_str(), ImGuiDataType_U64, &std::get<uint64_t>(Iter->second));
-            if (std::holds_alternative<float>(Iter->second)) SyncBancEntity |= ImGui::InputScalar(("##" + Title + Iter->first).c_str(), ImGuiDataType_Float, &std::get<float>(Iter->second));
-            if (std::holds_alternative<glm::vec3>(Iter->second)) SyncBancEntity |= ImGui::InputFloat3(("##" + Title + Iter->first).c_str(), &std::get<glm::vec3>(Iter->second).x);
+            bool ValueChanged = false;
+            if (std::holds_alternative<std::string>(Iter->second)) ValueChanged |= ImGui::InputText(("##" + Title + Iter->first).c_str(), &std::get<std::string>(Iter->second));
+            if (std::holds_alternative<bool>(Iter->second)) ValueChanged |= ImGui::Checkbox(("##" + Title + Iter->first).c_str(), &std::get<bool>(Iter->second));
+            if (std::holds_alternative<int32_t>(Iter->second)) ValueChanged |= ImGui::InputScalar(("##" + Title + Iter->first).c_str(), ImGuiDataType_S32, &std::get<int32_t>(Iter->second));
+            if (std::holds_alternative<int64_t>(Iter->second)) ValueChanged |= ImGui::InputScalar(("##" + Title + Iter->first).c_str(), ImGuiDataType_S64, &std::get<int64_t>(Iter->second));
+            if (std::holds_alternative<uint32_t>(Iter->second)) ValueChanged |= ImGui::InputScalar(("##" + Title + Iter->first).c_str(), ImGuiDataType_U32, &std::get<uint32_t>(Iter->second));
+            if (std::holds_alternative<uint64_t>(Iter->second)) ValueChanged |= ImGui::InputScalar(("##" + Title + Iter->first).c_str(), ImGuiDataType_U64, &std::get<uint64_t>(Iter->second));
+            if (std::holds_alternative<float>(Iter->second)) ValueChanged |= ImGui::InputScalar(("##" + Title + Iter->first).c_str(), ImGuiDataType_Float, &std::get<float>(Iter->second));
+            if (std::holds_alternative<glm::vec3>(Iter->second)) ValueChanged |= ImGui::InputFloat3(("##" + Title + Iter->first).c_str(), &std::get<glm::vec3>(Iter->second).x);
+            SyncBancEntity |= ValueChanged;
+            if (ValueChanged && SyncBancEntityModel != nullptr)
+            {
+                *SyncBancEntityModel = true;
+            }
 
             ImGui::PopItemWidth();
 
@@ -1581,6 +1608,11 @@ namespace application::rendering::map_editor
             if (Delete)
             {
                 Iter = Map.erase(Iter);
+                SyncBancEntity = true;
+                if (SyncBancEntityModel != nullptr)
+                {
+                    *SyncBancEntityModel = true;
+                }
                 continue;
             }
 
@@ -1598,6 +1630,7 @@ namespace application::rendering::map_editor
         {
             application::game::Scene::BancEntityRenderInfo* RenderInfo = GetSelectedActor();
             bool SyncBancEntity = false;
+            bool SyncBancEntityModel = false;
 
             if (RenderInfo != nullptr && (!mHasTexturePatternDebugSelection || mLastTexturePatternDebugHash != RenderInfo->mEntity->mHash || mLastTexturePatternDebugSRTHash != RenderInfo->mEntity->mSRTHash))
             {
@@ -2013,7 +2046,7 @@ namespace application::rendering::map_editor
                 ImGui::Unindent();
             }
 
-            DrawDynamicTypePropertiesHeader("Dynamic", RenderInfo->mEntity->mDynamic, SyncBancEntity, mPropertiesWindowInfo.mSetDynamicColumnWidth, ImGuiTreeNodeFlags_DefaultOpen);
+            DrawDynamicTypePropertiesHeader("Dynamic", RenderInfo->mEntity->mDynamic, SyncBancEntity, mPropertiesWindowInfo.mSetDynamicColumnWidth, ImGuiTreeNodeFlags_DefaultOpen, 1, &SyncBancEntityModel);
 
             if (ImGui::CollapsingHeader("Phive", ImGuiTreeNodeFlags_DefaultOpen))
             {
@@ -2272,8 +2305,8 @@ namespace application::rendering::map_editor
                  }
             }
 
-            DrawDynamicTypePropertiesHeader("Presence", RenderInfo->mEntity->mPresence, SyncBancEntity, mPropertiesWindowInfo.mSetPresenceColumnWidth, ImGuiTreeNodeFlags_None);
-            DrawDynamicTypePropertiesHeader("External Parameters", RenderInfo->mEntity->mExternalParameter, SyncBancEntity, mPropertiesWindowInfo.mSetExternalParametersColumnWidth, ImGuiTreeNodeFlags_None);
+            DrawDynamicTypePropertiesHeader("Presence", RenderInfo->mEntity->mPresence, SyncBancEntity, mPropertiesWindowInfo.mSetPresenceColumnWidth, ImGuiTreeNodeFlags_None, 1, &SyncBancEntityModel);
+            DrawDynamicTypePropertiesHeader("External Parameters", RenderInfo->mEntity->mExternalParameter, SyncBancEntity, mPropertiesWindowInfo.mSetExternalParametersColumnWidth, ImGuiTreeNodeFlags_None, 1, &SyncBancEntityModel);
 
             auto OnAddLinkPress = [this, &RenderInfo]()
                 {
@@ -2671,6 +2704,10 @@ namespace application::rendering::map_editor
 
             if (SyncBancEntity)
                 mScene.SyncBancEntity(RenderInfo);
+            if (SyncBancEntityModel)
+            {
+                mScene.SyncBancEntityModel(RenderInfo);
+            }
         }
         else if (mEditingMode == EditingMode::TERRAIN)
         {
@@ -2703,14 +2740,24 @@ namespace application::rendering::map_editor
 
     void UIMapEditor::DrawHornAttachment(const application::game::Scene::BancEntityRenderInfo& RenderInfo, const glm::mat4& BaseModelMatrix)
     {
-        if (RenderInfo.mEntity->mHornBfresRenderer == nullptr || !RenderInfo.mEntity->mHasHornAttachment)
+        if (RenderInfo.mEntity->mHornBfresRenderer != nullptr && RenderInfo.mEntity->mHasHornAttachment)
         {
-            return;
+            std::vector<glm::mat4> HornInstanceMatrix(1);
+            HornInstanceMatrix[0] = BaseModelMatrix * RenderInfo.mEntity->mHornAttachmentMatrix * RenderInfo.mEntity->mHornModelCorrectionMatrix;
+            RenderInfo.mEntity->mHornBfresRenderer->Draw(HornInstanceMatrix);
         }
 
-        std::vector<glm::mat4> HornInstanceMatrix(1);
-        HornInstanceMatrix[0] = BaseModelMatrix * RenderInfo.mEntity->mHornAttachmentMatrix * RenderInfo.mEntity->mHornModelCorrectionMatrix;
-        RenderInfo.mEntity->mHornBfresRenderer->Draw(HornInstanceMatrix);
+        for (const application::game::BancEntity::EquipmentAttachment& Attachment : RenderInfo.mEntity->mEquipmentAttachments)
+        {
+            if (!Attachment.mEnabled || Attachment.mBfresRenderer == nullptr)
+            {
+                continue;
+            }
+
+            std::vector<glm::mat4> AttachmentInstanceMatrix(1);
+            AttachmentInstanceMatrix[0] = BaseModelMatrix * Attachment.mAttachmentMatrix * Attachment.mModelCorrectionMatrix;
+            Attachment.mBfresRenderer->Draw(AttachmentInstanceMatrix);
+        }
     }
 
     void UIMapEditor::DrawInstancedBancEntityRenderInfo(std::vector<application::game::Scene::BancEntityRenderInfo>& Entities)

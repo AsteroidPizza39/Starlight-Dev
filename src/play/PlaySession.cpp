@@ -796,6 +796,39 @@ namespace application::play
         return false;
     }
 
+    glm::mat4 ComposeEntityModelMatrix(const application::game::Scene::BancEntityRenderInfo& RenderInfo)
+    {
+        glm::mat4 ModelMatrix(1.0f);
+        ModelMatrix = glm::translate(ModelMatrix, RenderInfo.mTranslate);
+        ModelMatrix = glm::rotate(ModelMatrix, glm::radians(RenderInfo.mRotate.z), glm::vec3(0.0f, 0.0f, 1.0f));
+        ModelMatrix = glm::rotate(ModelMatrix, glm::radians(RenderInfo.mRotate.y), glm::vec3(0.0f, 1.0f, 0.0f));
+        ModelMatrix = glm::rotate(ModelMatrix, glm::radians(RenderInfo.mRotate.x), glm::vec3(1.0f, 0.0f, 0.0f));
+        ModelMatrix = glm::scale(ModelMatrix, RenderInfo.mScale);
+        return ModelMatrix;
+    }
+
+    void DrawEntityAttachments(const application::game::Scene::BancEntityRenderInfo& RenderInfo, const glm::mat4& BaseModelMatrix)
+    {
+        if (RenderInfo.mEntity->mHornBfresRenderer != nullptr && RenderInfo.mEntity->mHasHornAttachment)
+        {
+            std::vector<glm::mat4> HornInstanceMatrix(1);
+            HornInstanceMatrix[0] = BaseModelMatrix * RenderInfo.mEntity->mHornAttachmentMatrix * RenderInfo.mEntity->mHornModelCorrectionMatrix;
+            RenderInfo.mEntity->mHornBfresRenderer->Draw(HornInstanceMatrix);
+        }
+
+        for (const application::game::BancEntity::EquipmentAttachment& Attachment : RenderInfo.mEntity->mEquipmentAttachments)
+        {
+            if (!Attachment.mEnabled || Attachment.mBfresRenderer == nullptr)
+            {
+                continue;
+            }
+
+            std::vector<glm::mat4> AttachmentInstanceMatrix(1);
+            AttachmentInstanceMatrix[0] = BaseModelMatrix * Attachment.mAttachmentMatrix * Attachment.mModelCorrectionMatrix;
+            Attachment.mBfresRenderer->Draw(AttachmentInstanceMatrix);
+        }
+    }
+
     void PlaySession::DrawInstancedBancEntityRenderInfo(std::vector<application::game::Scene::BancEntityRenderInfo>& Entities)
     {
         if (Entities.empty()) return;
@@ -894,6 +927,24 @@ namespace application::play
             {
                 Group.mEntity->mBfresRenderer->Draw(Group.mMatrices, Group.mFrame, &Group.mEntity->mTexturePatternAlbedoOverridesByMaterial);
             }
+        }
+
+        for (application::game::Scene::BancEntityRenderInfo& RenderInfo : Entities)
+        {
+            const bool IsVisible = (!RenderInfo.mEntity->mBfresRenderer->mIsSystemModelTransparent && RenderInfo.mSphereScreenSize >= 5.0f) &&
+                mFrustum.SphereInFrustum(
+                    RenderInfo.mTranslate.x,
+                    RenderInfo.mTranslate.y,
+                    RenderInfo.mTranslate.z,
+                    RenderInfo.mEntity->mBfresRenderer->mBfresFile->Models.GetByIndex(0).mValue.BoundingBoxSphereRadius *
+                    std::fmax(std::fmax(RenderInfo.mScale.x, RenderInfo.mScale.y), RenderInfo.mScale.z));
+
+            if (!IsVisible)
+            {
+                continue;
+            }
+
+            DrawEntityAttachments(RenderInfo, ComposeEntityModelMatrix(RenderInfo));
         }
     }
 

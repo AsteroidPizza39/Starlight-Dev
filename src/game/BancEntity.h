@@ -216,6 +216,16 @@ namespace application::game
 		glm::mat4 mHornAttachmentMatrix = glm::mat4(1.0f);
 		glm::mat4 mHornModelCorrectionMatrix = glm::mat4(1.0f);
 		bool mHasHornAttachment = false;
+		struct EquipmentAttachment
+		{
+			std::string mSlotKey = "";
+			std::string mActorName = "";
+			application::gl::BfresRenderer* mBfresRenderer = nullptr;
+			glm::mat4 mAttachmentMatrix = glm::mat4(1.0f);
+			glm::mat4 mModelCorrectionMatrix = glm::mat4(1.0f);
+			bool mEnabled = false;
+		};
+		std::vector<EquipmentAttachment> mEquipmentAttachments;
 		int32_t mTexturePatternFrame = -1;
 		std::string mTexturePatternAnimationName = "";
 		std::string mTexturePatternModelProjectName = "";

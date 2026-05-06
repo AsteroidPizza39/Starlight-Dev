@@ -106,9 +106,9 @@ namespace application::rendering::map_editor
 		void DrawHornAttachment(const application::game::Scene::BancEntityRenderInfo& RenderInfo, const glm::mat4& BaseModelMatrix);
 		void LogTexturePatternDebug(const application::game::Scene::BancEntityRenderInfo& RenderInfo) const;
 
-		void DrawDynamicTypePropertiesHeader(const std::string& Title, std::map<std::string, std::variant<std::string, bool, int32_t, int64_t, uint32_t, uint64_t, float, glm::vec3>>& Map, bool& SyncBancEntity, bool& UpdateColumnWidth, ImGuiTreeNodeFlags Flags, int IndentationLevel = 1);
-		void DrawDynamicTypePropertiesSeparator(const std::string& Title, std::map<std::string, std::variant<std::string, bool, int32_t, int64_t, uint32_t, uint64_t, float, glm::vec3>>& Map, bool& SyncBancEntity, bool& UpdateColumnWidth, int IndentationLevel = 1);
-		void DrawDynamicTypePropertiesTable(const std::string& Title, std::map<std::string, std::variant<std::string, bool, int32_t, int64_t, uint32_t, uint64_t, float, glm::vec3>>& Map, bool& SyncBancEntity, bool& UpdateColumnWidth, int IndentationLevel = 1);
+		void DrawDynamicTypePropertiesHeader(const std::string& Title, std::map<std::string, std::variant<std::string, bool, int32_t, int64_t, uint32_t, uint64_t, float, glm::vec3>>& Map, bool& SyncBancEntity, bool& UpdateColumnWidth, ImGuiTreeNodeFlags Flags, int IndentationLevel = 1, bool* SyncBancEntityModel = nullptr);
+		void DrawDynamicTypePropertiesSeparator(const std::string& Title, std::map<std::string, std::variant<std::string, bool, int32_t, int64_t, uint32_t, uint64_t, float, glm::vec3>>& Map, bool& SyncBancEntity, bool& UpdateColumnWidth, int IndentationLevel = 1, bool* SyncBancEntityModel = nullptr);
+		void DrawDynamicTypePropertiesTable(const std::string& Title, std::map<std::string, std::variant<std::string, bool, int32_t, int64_t, uint32_t, uint64_t, float, glm::vec3>>& Map, bool& SyncBancEntity, bool& UpdateColumnWidth, int IndentationLevel = 1, bool* SyncBancEntityModel = nullptr);
 
 		void EnterPlayMode();
 		void ExitPlayMode();

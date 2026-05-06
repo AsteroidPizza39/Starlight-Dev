@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <limits>
 #include <cstring>
+#include <unordered_set>
 
 namespace application::game
 {
@@ -264,6 +265,455 @@ namespace application::game
 				}
 			}
 			return Score;
+		}
+
+		std::string NormalizeWorkGymlPathToBymlPath(std::string Path)
+		{
+			Path = NormalizePath(Path);
+			if (Path.starts_with("?"))
+			{
+				Path.erase(Path.begin());
+			}
+
+			const std::string Lower = ToLowerCopy(Path);
+			if (Lower.starts_with("work/"))
+			{
+				Path = Path.substr(5);
+			}
+
+			if (ContainsInsensitive(Path, ".gyml"))
+			{
+				const size_t DotPos = ToLowerCopy(Path).rfind(".gyml");
+				if (DotPos != std::string::npos)
+				{
+					Path = Path.substr(0, DotPos) + ".bgyml";
+				}
+			}
+
+			return Path;
+		}
+
+		std::string NormalizeActorReferenceToGymlName(std::string Value)
+		{
+			Value = NormalizePath(Value);
+			if (Value.starts_with("?"))
+			{
+				Value.erase(Value.begin());
+			}
+
+			if (ContainsInsensitive(Value, "/"))
+			{
+				Value = std::filesystem::path(Value).stem().string();
+			}
+			if (ContainsInsensitive(Value, ".engine__actor__actorparam"))
+			{
+				const size_t Pos = ToLowerCopy(Value).find(".engine__actor__actorparam");
+				if (Pos != std::string::npos)
+				{
+					Value = Value.substr(0, Pos);
+				}
+			}
+			return Value;
+		}
+
+		bool TryReadBymlBytesFromSarc(application::file::game::SarcFile& Pack, const std::string& RelativePath, std::vector<unsigned char>& OutBytes)
+		{
+			const std::string Normalized = NormalizePath(RelativePath);
+			const std::array<std::string, 2> CandidatePaths = { Normalized, Normalized + ".zs" };
+			for (const std::string& Candidate : CandidatePaths)
+			{
+				if (!Pack.HasEntry(Candidate))
+				{
+					continue;
+				}
+
+				OutBytes = Pack.GetEntry(Candidate).mBytes;
+				if (!IsBymlBytes(OutBytes) && IsLikelyZStd(OutBytes))
+				{
+					OutBytes = application::file::game::ZStdBackend::Decompress(OutBytes);
+				}
+				if (IsBymlBytes(OutBytes))
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		bool TryReadBymlBytesFromDump(const std::string& RelativePath, std::vector<unsigned char>& OutBytes)
+		{
+			const std::string Normalized = NormalizePath(RelativePath);
+			const std::array<std::string, 2> CandidatePaths = { Normalized, Normalized + ".zs" };
+			for (const std::string& Candidate : CandidatePaths)
+			{
+				const std::string AbsolutePath = application::util::FileUtil::GetRomFSFilePath(Candidate);
+				if (!application::util::FileUtil::FileExists(AbsolutePath))
+				{
+					continue;
+				}
+
+				OutBytes = application::util::FileUtil::ReadFile(AbsolutePath);
+				if (!IsBymlBytes(OutBytes) && IsLikelyZStd(OutBytes))
+				{
+					OutBytes = application::file::game::ZStdBackend::Decompress(OutBytes);
+				}
+				if (IsBymlBytes(OutBytes))
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		std::vector<application::file::game::byml::BymlFile> ResolveBymlInheritanceChain(application::game::ActorPack& Pack, const std::string& StartPath)
+		{
+			std::vector<application::file::game::byml::BymlFile> Chain;
+			if (StartPath.empty())
+			{
+				return Chain;
+			}
+
+			std::unordered_set<std::string> Visited;
+			std::string CurrentPath = NormalizeWorkGymlPathToBymlPath(StartPath);
+			while (!CurrentPath.empty() && !Visited.contains(CurrentPath))
+			{
+				Visited.insert(CurrentPath);
+
+				std::vector<unsigned char> Bytes;
+				bool Loaded = TryReadBymlBytesFromSarc(Pack.mPack, CurrentPath, Bytes);
+				if (!Loaded)
+				{
+					Loaded = TryReadBymlBytesFromDump(CurrentPath, Bytes);
+				}
+				if (!Loaded)
+				{
+					break;
+				}
+
+				application::file::game::byml::BymlFile Byml(Bytes);
+				Chain.push_back(Byml);
+				if (!Byml.HasChild("$parent"))
+				{
+					break;
+				}
+
+				CurrentPath = NormalizeWorkGymlPathToBymlPath(Byml.GetNode("$parent")->GetValue<std::string>());
+			}
+
+			return Chain;
+		}
+
+		std::optional<std::string> FindFirstNonEmptyStringInChain(std::vector<application::file::game::byml::BymlFile>& Chain, const std::string& Key)
+		{
+			for (application::file::game::byml::BymlFile& Node : Chain)
+			{
+				if (!Node.HasChild(Key))
+				{
+					continue;
+				}
+
+				const std::string Value = Node.GetNode(Key)->GetValue<std::string>();
+				if (!Value.empty())
+				{
+					return Value;
+				}
+			}
+			return std::nullopt;
+		}
+
+		std::optional<float> FindFirstNumericInChain(std::vector<application::file::game::byml::BymlFile>& Chain, const std::string& Key)
+		{
+			for (application::file::game::byml::BymlFile& Node : Chain)
+			{
+				if (!Node.HasChild(Key))
+				{
+					continue;
+				}
+
+				application::file::game::byml::BymlFile::Node* ValueNode = Node.GetNode(Key);
+				switch (ValueNode->GetType())
+				{
+				case application::file::game::byml::BymlFile::Type::Float:
+					return ValueNode->GetValue<float>();
+				case application::file::game::byml::BymlFile::Type::Int32:
+					return static_cast<float>(ValueNode->GetValue<int32_t>());
+				case application::file::game::byml::BymlFile::Type::UInt32:
+					return static_cast<float>(ValueNode->GetValue<uint32_t>());
+				case application::file::game::byml::BymlFile::Type::Int64:
+					return static_cast<float>(ValueNode->GetValue<int64_t>());
+				case application::file::game::byml::BymlFile::Type::UInt64:
+					return static_cast<float>(ValueNode->GetValue<uint64_t>());
+				default:
+					break;
+				}
+			}
+
+			return std::nullopt;
+		}
+
+		std::unordered_map<std::string, std::string> ResolveBlackboardStringInitValues(std::vector<application::file::game::byml::BymlFile>& Chain)
+		{
+			std::unordered_map<std::string, std::string> Values;
+			for (auto It = Chain.rbegin(); It != Chain.rend(); ++It)
+			{
+				application::file::game::byml::BymlFile& Byml = *It;
+				if (!Byml.HasChild("BlackboardParamStringArray"))
+				{
+					continue;
+				}
+
+				application::file::game::byml::BymlFile::Node* ArrayNode = Byml.GetNode("BlackboardParamStringArray");
+				for (application::file::game::byml::BymlFile::Node& Item : ArrayNode->GetChildren())
+				{
+					if (!Item.HasChild("BBKey") || !Item.HasChild("InitValConverted"))
+					{
+						continue;
+					}
+
+					const std::string BBKey = Item.GetChild("BBKey")->GetValue<std::string>();
+					const std::string InitValConverted = Item.GetChild("InitValConverted")->GetValue<std::string>();
+					Values[BBKey] = InitValConverted;
+				}
+			}
+			return Values;
+		}
+
+		std::optional<std::string> FindActorRootParamBymlPath(application::game::ActorPack& Pack, const std::string& Gyml)
+		{
+			const std::string GymlLower = ToLowerCopy(Gyml);
+			std::optional<std::string> BestPath = std::nullopt;
+			for (const application::file::game::SarcFile::Entry& Entry : Pack.mPack.GetEntries())
+			{
+				const std::string LowerName = ToLowerCopy(Entry.mName);
+				if (!LowerName.starts_with("actor/") || !LowerName.ends_with(".engine__actor__actorparam.bgyml"))
+				{
+					continue;
+				}
+
+				const std::string Stem = ToLowerCopy(std::filesystem::path(Entry.mName).stem().string());
+				if (Stem.starts_with(GymlLower))
+				{
+					return Entry.mName;
+				}
+
+				if (!BestPath.has_value())
+				{
+					BestPath = Entry.mName;
+				}
+			}
+			return BestPath;
+		}
+
+		application::gl::BfresRenderer* ResolveHornRenderer(const std::optional<std::string>& HornModelPath);
+
+		application::gl::BfresRenderer* ResolveRendererFromActorGyml(const std::string& Gyml)
+		{
+			if (Gyml.empty())
+			{
+				return nullptr;
+			}
+
+			application::game::ActorPack* EquipmentPack = application::manager::ActorPackMgr::GetActorPack(Gyml);
+			if (EquipmentPack == nullptr)
+			{
+				return nullptr;
+			}
+
+			if (application::game::actor_component::ActorComponentBase* BaseComponent = EquipmentPack->GetComponent(application::game::actor_component::ActorComponentBase::ComponentType::MODEL_INFO); BaseComponent != nullptr)
+			{
+				application::game::actor_component::ActorComponentModelInfo* ModelInfo = static_cast<application::game::actor_component::ActorComponentModelInfo*>(BaseComponent);
+				if (ModelInfo != nullptr && ModelInfo->mModelProjectName.has_value() && ModelInfo->mFmdbName.has_value() &&
+					!ModelInfo->mModelProjectName->empty() && !ModelInfo->mFmdbName->empty())
+				{
+					application::file::game::bfres::BfresFile* File = application::manager::BfresFileMgr::GetBfresFile(
+						application::util::FileUtil::GetBfresFilePath(ModelInfo->mModelProjectName.value() + "." + ModelInfo->mFmdbName.value() + ".bfres"));
+					application::gl::BfresRenderer* Renderer = application::manager::BfresRendererMgr::GetRenderer(File);
+					if (Renderer != nullptr && !Renderer->mBfresFile->mDefaultModel)
+					{
+						return Renderer;
+					}
+				}
+			}
+
+			std::vector<std::string> FallbackModelPathCandidates;
+			for (const application::file::game::SarcFile::Entry& Entry : EquipmentPack->mPack.GetEntries())
+			{
+				const std::string LowerName = ToLowerCopy(Entry.mName);
+				if (!LowerName.starts_with("component/modelinfo/") || !LowerName.ends_with(".bgyml"))
+				{
+					continue;
+				}
+
+				std::vector<unsigned char> Bytes = Entry.mBytes;
+				if (!IsBymlBytes(Bytes) && IsLikelyZStd(Bytes))
+				{
+					Bytes = application::file::game::ZStdBackend::Decompress(Bytes);
+				}
+				if (!IsBymlBytes(Bytes))
+				{
+					continue;
+				}
+
+				application::file::game::byml::BymlFile ModelInfoByml(Bytes);
+				for (application::file::game::byml::BymlFile::Node& RootNode : ModelInfoByml.GetNodes())
+				{
+					CollectHornPathCandidates(RootNode, FallbackModelPathCandidates);
+				}
+			}
+
+			for (const std::string& Candidate : FallbackModelPathCandidates)
+			{
+				application::gl::BfresRenderer* Renderer = ResolveHornRenderer(std::optional<std::string>(Candidate));
+				if (Renderer != nullptr && !Renderer->mBfresFile->mDefaultModel)
+				{
+					return Renderer;
+				}
+			}
+
+			return nullptr;
+		}
+
+		std::optional<std::string> FindEquipmentUserParamPathInPack(application::game::ActorPack& Pack, const std::string& Gyml)
+		{
+			const std::string GymlLower = ToLowerCopy(Gyml);
+			const std::array<std::string, 9> TierTokens = { "junior", "middle", "senior", "dark", "fire", "ice", "electric", "curse", "gold" };
+			std::optional<std::string> FamilyGymlLower = std::nullopt;
+			const size_t LastUnderscore = GymlLower.find_last_of('_');
+			if (LastUnderscore != std::string::npos && LastUnderscore + 1 < GymlLower.size())
+			{
+				const std::string TailToken = GymlLower.substr(LastUnderscore + 1);
+				if (std::find(TierTokens.begin(), TierTokens.end(), TailToken) != TierTokens.end())
+				{
+					FamilyGymlLower = GymlLower.substr(0, LastUnderscore);
+				}
+			}
+
+			int32_t BestScore = std::numeric_limits<int32_t>::min();
+			std::optional<std::string> BestPath = std::nullopt;
+			for (const application::file::game::SarcFile::Entry& Entry : Pack.mPack.GetEntries())
+			{
+				const std::string LowerName = ToLowerCopy(Entry.mName);
+				if (!LowerName.starts_with("component/equipmentuserparam/") || !LowerName.ends_with(".bgyml"))
+				{
+					continue;
+				}
+
+				const std::string Stem = ToLowerCopy(std::filesystem::path(Entry.mName).stem().string());
+				if (Stem.starts_with(GymlLower))
+				{
+					return Entry.mName;
+				}
+				if (FamilyGymlLower.has_value() && Stem.starts_with(FamilyGymlLower.value()))
+				{
+					return Entry.mName;
+				}
+
+				int32_t Score = 0;
+				if (ContainsInsensitive(Stem, "enemycommon"))
+				{
+					Score -= 100;
+				}
+				for (const std::string& Token : SplitActorNameTokens(Gyml))
+				{
+					if (Token.length() < 4)
+					{
+						continue;
+					}
+					if (Stem.find(Token) != std::string::npos)
+					{
+						Score += 5;
+					}
+				}
+
+				if (Score >= BestScore || !BestPath.has_value())
+				{
+					BestScore = Score;
+					BestPath = Entry.mName;
+				}
+			}
+			return BestPath;
+		}
+
+		application::file::game::bfres::BfresFile::Skeleton::Bone* FindBoneByName(
+			application::file::game::bfres::BfresFile::Model& Model,
+			const std::string& PreferredName,
+			std::string* ResolvedBoneName = nullptr)
+		{
+			auto Normalize = [](const std::string& BoneName)
+				{
+					std::string Result = BoneName;
+					Result.erase(std::remove_if(Result.begin(), Result.end(), [](unsigned char Ch) { return std::isspace(Ch) != 0; }), Result.end());
+					std::replace(Result.begin(), Result.end(), '-', '_');
+					return ToLowerCopy(Result);
+				};
+			const std::string PreferredNormalized = Normalize(PreferredName);
+			for (auto& [BoneName, BoneNode] : Model.ModelSkeleton.Bones.mNodes)
+			{
+				if (Normalize(BoneName) == PreferredNormalized)
+				{
+					if (ResolvedBoneName != nullptr)
+					{
+						*ResolvedBoneName = BoneName;
+					}
+					return &BoneNode.mValue;
+				}
+			}
+			for (auto& [BoneName, BoneNode] : Model.ModelSkeleton.Bones.mNodes)
+			{
+				if (Normalize(BoneName).find(PreferredNormalized) != std::string::npos)
+				{
+					if (ResolvedBoneName != nullptr)
+					{
+						*ResolvedBoneName = BoneName;
+					}
+					return &BoneNode.mValue;
+				}
+			}
+			return nullptr;
+		}
+
+		std::string BuildBoneDebugPreview(application::file::game::bfres::BfresFile::Model& Model, size_t Limit = 20)
+		{
+			std::string Preview;
+			size_t Count = 0;
+			for (auto& [BoneName, BoneNode] : Model.ModelSkeleton.Bones.mNodes)
+			{
+				if (!Preview.empty())
+				{
+					Preview += ", ";
+				}
+				Preview += BoneName;
+				Count++;
+				if (Count >= Limit)
+				{
+					break;
+				}
+			}
+			return Preview;
+		}
+
+		glm::mat4 BuildAttachmentCorrectionMatrix(application::file::game::bfres::BfresFile::Model& EquipmentModel, const std::string& SourceBoneName)
+		{
+			uint32_t BakedBoneIndex = 0;
+			for (const auto& [ShapeName, ShapeNode] : EquipmentModel.Shapes.mNodes)
+			{
+				if (ShapeNode.mValue.BoneIndex >= 0)
+				{
+					BakedBoneIndex = static_cast<uint32_t>(ShapeNode.mValue.BoneIndex);
+					break;
+				}
+			}
+
+			application::file::game::bfres::BfresFile::Skeleton::Bone& BakedBone = EquipmentModel.ModelSkeleton.Bones.GetByIndex(BakedBoneIndex).mValue;
+			application::file::game::bfres::BfresFile::Skeleton::Bone* SourceBone = FindBoneByName(EquipmentModel, SourceBoneName);
+			if (SourceBone == nullptr)
+			{
+				SourceBone = &BakedBone;
+			}
+
+			return SourceBone->WorldMatrix * glm::inverse(BakedBone.WorldMatrix);
 		}
 
 		std::optional<std::string> ResolveHornModelPath(application::game::ActorPack& Pack, const std::optional<std::string>& HornTypeToken, const std::string& Gyml)
@@ -973,10 +1423,10 @@ namespace application::game
 					}
 
 					std::vector<std::string> Candidates = StrictCandidates;
+					const std::string MaterialHint = GetMaterialNameHint(MaterialName);
 
 					// Limited alias fallback for families where the material is named "skin" but
 					// textures are named "...Body_Alb". Keep this narrow to avoid cross-material bleed.
-					const std::string MaterialHint = GetMaterialNameHint(MaterialName);
 					if (Candidates.empty() && MaterialHint == "skin")
 					{
 						for (const std::string& TextureName : TextureValues)
@@ -1025,6 +1475,7 @@ namespace application::game
 			}
 			return OverridesByMaterial.empty() ? std::nullopt : std::optional<std::unordered_map<std::string, std::string>>(std::move(OverridesByMaterial));
 		}
+
 	}
 
 	std::vector<const char*> BancEntity::BakedFluid::gFluidShapeTypes = 
@@ -1496,6 +1947,7 @@ namespace application::game
 		mTexturePatternModelProjectName.clear();
 		mTexturePatternOverrideKey.clear();
 		mTexturePatternAlbedoOverridesByMaterial.clear();
+		mEquipmentAttachments.clear();
 
 		if (mActorPack == nullptr)
 			return false;
@@ -1527,6 +1979,7 @@ namespace application::game
 					{
 						mTexturePatternAlbedoOverridesByMaterial = std::move(Overrides.value());
 					}
+
 				}
 			}
 		}
@@ -1590,84 +2043,213 @@ namespace application::game
 					mHasHornAttachment = true;
 				}
 
-				// Horn-local correction:
-				// Bind horn sub_root local space to actor Material_Pod.
-				// Since horn vertices are baked into the mesh's rigid bind bone space,
-				// remap from baked-bone space to sub_root space before attachment.
-				application::file::game::bfres::BfresFile::Model& HornModel = mHornBfresRenderer->mBfresFile->Models.GetByIndex(0).mValue;
-				if (!HornModel.ModelSkeleton.Bones.mNodes.empty())
-				{
-					uint32_t BakedBoneIndex = 0;
-					for (const auto& [ShapeName, ShapeNode] : HornModel.Shapes.mNodes)
-					{
-						if (ShapeNode.mValue.BoneIndex >= 0)
-						{
-							BakedBoneIndex = static_cast<uint32_t>(ShapeNode.mValue.BoneIndex);
-							break;
-						}
-					}
-
-					application::file::game::bfres::BfresFile::Skeleton::Bone& BakedBone = HornModel.ModelSkeleton.Bones.GetByIndex(BakedBoneIndex).mValue;
-					application::file::game::bfres::BfresFile::Skeleton::Bone* SubRootBone = nullptr;
-					std::string SelectedSubRootBoneName = "";
-
-					// Pass 1: exact-case canonical token as requested.
-					for (auto& [BoneName, BoneNode] : HornModel.ModelSkeleton.Bones.mNodes)
-					{
-						if (TrimAsciiCopy(BoneName) == "Sub_Root")
-						{
-							SubRootBone = &BoneNode.mValue;
-							SelectedSubRootBoneName = BoneName;
-							break;
-						}
-					}
-
-					// Pass 2: normalized exact match.
-					if (SubRootBone == nullptr)
-					{
-						for (auto& [BoneName, BoneNode] : HornModel.ModelSkeleton.Bones.mNodes)
-						{
-							if (NormalizeBoneNameForLookup(BoneName) == "sub_root")
-							{
-								SubRootBone = &BoneNode.mValue;
-								SelectedSubRootBoneName = BoneName;
-								break;
-							}
-						}
-					}
-
-					// Pass 3: normalized contains match for minor naming variants.
-					if (SubRootBone == nullptr)
-					{
-						for (auto& [BoneName, BoneNode] : HornModel.ModelSkeleton.Bones.mNodes)
-						{
-							if (NormalizeBoneNameForLookup(BoneName).find("sub_root") != std::string::npos)
-							{
-								SubRootBone = &BoneNode.mValue;
-								SelectedSubRootBoneName = BoneName;
-								break;
-							}
-						}
-					}
-
-					// Fallback keeps prior behavior if a horn unexpectedly has no sub_root.
-					if (SubRootBone == nullptr)
-					{
-						SubRootBone = &BakedBone;
-						application::util::Logger::Warning("TexturePatternDebug", "Horn Sub_Root not found for actor=%s, using baked bone index=%u", mGyml.c_str(), BakedBoneIndex);
-					}
-					else
-					{
-						application::util::Logger::Info("TexturePatternDebug", "Horn bind actor=%s Sub_Root=%s bakedBoneIndex=%u", mGyml.c_str(), SelectedSubRootBoneName.c_str(), BakedBoneIndex);
-					}
-
-					mHornModelCorrectionMatrix = SubRootBone->WorldMatrix * glm::inverse(BakedBone.WorldMatrix);
-				}
+				// Requested behavior: bind horn model origin (0,0,0) directly to Material_Pod.
+				// No horn-local bone correction transform is applied.
+				mHornModelCorrectionMatrix = glm::mat4(1.0f);
 
 				if (!mHasHornAttachment)
 				{
 					mHornBfresRenderer = nullptr;
 				}
+			}
+
+			std::unordered_map<std::string, std::string> SlotValues;
+			std::string WeaponBoneName = "Weapon";
+			std::string ShieldBoneName = "Tool";
+			std::string BowBoneName = "Bow";
+			float BowScaleRatio = 1.0f;
+			float ShieldScaleRatio = 1.0f;
+			float SmallSwordScaleRatio = 1.0f;
+			float LargeSwordScaleRatio = 1.0f;
+			float SpearScaleRatio = 1.0f;
+
+			const std::array<const std::map<std::string, std::variant<std::string, bool, int32_t, int64_t, uint32_t, uint64_t, float, glm::vec3>>*, 3> SlotSources =
+			{
+				&mPresence,
+				&mExternalParameter,
+				&mDynamic
+			};
+			for (const auto* Source : SlotSources)
+			{
+				for (const auto& [Key, Value] : *Source)
+				{
+					if (!std::holds_alternative<std::string>(Value))
+					{
+						continue;
+					}
+
+					const std::string StringValue = std::get<std::string>(Value);
+					if (StringValue.empty())
+					{
+						continue;
+					}
+
+					if (Key == "EquipmentUser_Weapon" || Key == "EquipmentUser_Shield" || Key == "EquipmentUser_Bow" ||
+						Key == "EquipmentUser_Head" || Key == "EquipmentUser_Upper" || Key == "EquipmentUser_Lower")
+					{
+						SlotValues[Key] = StringValue;
+					}
+					else if (Key == "EquipmentUser_Helmet")
+					{
+						SlotValues["EquipmentUser_Head"] = StringValue;
+					}
+				}
+			}
+
+			if (std::optional<std::string> RootActorParamPath = FindActorRootParamBymlPath(*mActorPack, mGyml); RootActorParamPath.has_value())
+			{
+				std::vector<application::file::game::byml::BymlFile> ActorParamChain = ResolveBymlInheritanceChain(*mActorPack, RootActorParamPath.value());
+				std::optional<std::string> EquipmentUserParamPath = std::nullopt;
+				std::optional<std::string> PackMatchedEquipmentUserParamPath = FindEquipmentUserParamPathInPack(*mActorPack, mGyml);
+				if (std::optional<std::string> EquipmentUserRef = FindFirstNonEmptyStringInChain(ActorParamChain, "EquipmentUserRef"); EquipmentUserRef.has_value())
+				{
+					EquipmentUserParamPath = NormalizeWorkGymlPathToBymlPath(EquipmentUserRef.value());
+					if (PackMatchedEquipmentUserParamPath.has_value() &&
+						(ContainsInsensitive(EquipmentUserParamPath.value(), "enemycommon") || ContainsInsensitive(EquipmentUserParamPath.value(), "common")))
+					{
+						EquipmentUserParamPath = PackMatchedEquipmentUserParamPath;
+					}
+				}
+				else
+				{
+					EquipmentUserParamPath = PackMatchedEquipmentUserParamPath;
+				}
+
+				if (EquipmentUserParamPath.has_value())
+				{
+					application::util::Logger::Info("EquipmentDebug", "Owner=%s EquipmentUserParamPath=%s PackMatched=%s",
+						mGyml.c_str(),
+						EquipmentUserParamPath->c_str(),
+						PackMatchedEquipmentUserParamPath.has_value() ? PackMatchedEquipmentUserParamPath->c_str() : "<none>");
+					std::vector<application::file::game::byml::BymlFile> EquipmentUserChain = ResolveBymlInheritanceChain(*mActorPack, EquipmentUserParamPath.value());
+					if (!EquipmentUserChain.empty())
+					{
+						std::optional<std::string> BlackboardTableRef = FindFirstNonEmptyStringInChain(EquipmentUserChain, "BlackboardTableRef");
+						if (BlackboardTableRef.has_value())
+						{
+							std::vector<application::file::game::byml::BymlFile> BlackboardChain =
+								ResolveBymlInheritanceChain(*mActorPack, NormalizeWorkGymlPathToBymlPath(BlackboardTableRef.value()));
+							std::unordered_map<std::string, std::string> BlackboardSlots = ResolveBlackboardStringInitValues(BlackboardChain);
+							for (const auto& [Key, Value] : BlackboardSlots)
+							{
+								if (!SlotValues.contains(Key))
+								{
+									SlotValues[Key] = Value;
+								}
+							}
+						}
+
+						WeaponBoneName = FindFirstNonEmptyStringInChain(EquipmentUserChain, "WeaponEquippedBoneName").value_or(WeaponBoneName);
+						ShieldBoneName = FindFirstNonEmptyStringInChain(EquipmentUserChain, "ToolEquippedBoneName").value_or(ShieldBoneName);
+						BowBoneName = FindFirstNonEmptyStringInChain(EquipmentUserChain, "BowEquippedBoneName").value_or(BowBoneName);
+						BowScaleRatio = FindFirstNumericInChain(EquipmentUserChain, "BowScaleRatio").value_or(BowScaleRatio);
+						ShieldScaleRatio = FindFirstNumericInChain(EquipmentUserChain, "ShieldScaleRatio").value_or(ShieldScaleRatio);
+						SmallSwordScaleRatio = FindFirstNumericInChain(EquipmentUserChain, "SmallSwordScaleRatio").value_or(SmallSwordScaleRatio);
+						LargeSwordScaleRatio = FindFirstNumericInChain(EquipmentUserChain, "LargeSwordScaleRatio").value_or(LargeSwordScaleRatio);
+						SpearScaleRatio = FindFirstNumericInChain(EquipmentUserChain, "SpearScaleRatio").value_or(SpearScaleRatio);
+					}
+				}
+			}
+
+			if (SlotValues.contains("EquipmentUser_Helmet") && !SlotValues.contains("EquipmentUser_Head"))
+			{
+				SlotValues["EquipmentUser_Head"] = SlotValues["EquipmentUser_Helmet"];
+			}
+
+			application::util::Logger::Info("EquipmentDebug", "Owner=%s Equipment bones Weapon=%s Shield=%s Bow=%s ScaleRatios Bow=%g Shield=%g SmallSword=%g LargeSword=%g Spear=%g",
+				mGyml.c_str(), WeaponBoneName.c_str(), ShieldBoneName.c_str(), BowBoneName.c_str(),
+				BowScaleRatio, ShieldScaleRatio, SmallSwordScaleRatio, LargeSwordScaleRatio, SpearScaleRatio);
+
+			struct SlotConfig
+			{
+				std::string mSlotKey;
+				std::string mTargetBoneName;
+				std::string mSourceBoneName;
+			};
+			const std::array<SlotConfig, 6> SlotConfigs =
+			{
+				SlotConfig{"EquipmentUser_Weapon", WeaponBoneName, "Root"},
+				SlotConfig{"EquipmentUser_Shield", ShieldBoneName, "Root"},
+				SlotConfig{"EquipmentUser_Bow", BowBoneName, "Root"},
+				SlotConfig{"EquipmentUser_Head", "Root", "Root"},
+				SlotConfig{"EquipmentUser_Upper", "Root", "Root"},
+				SlotConfig{"EquipmentUser_Lower", "Root", "Root"}
+			};
+
+			application::file::game::bfres::BfresFile::Model& MainModel = mBfresRenderer->mBfresFile->Models.GetByIndex(0).mValue;
+			for (const SlotConfig& Slot : SlotConfigs)
+			{
+				if (!SlotValues.contains(Slot.mSlotKey))
+				{
+					continue;
+				}
+
+				const std::string Gyml = NormalizeActorReferenceToGymlName(SlotValues[Slot.mSlotKey]);
+				if (Gyml.empty())
+				{
+					continue;
+				}
+
+				application::gl::BfresRenderer* Renderer = ResolveRendererFromActorGyml(Gyml);
+				if (Renderer == nullptr || Renderer->mBfresFile->mDefaultModel)
+				{
+					if (Slot.mSlotKey == "EquipmentUser_Weapon")
+					{
+						application::util::Logger::Warning("EquipmentDebug", "Failed to resolve renderer for %s slot actor=%s targetBone=%s owner=%s", Slot.mSlotKey.c_str(), Gyml.c_str(), Slot.mTargetBoneName.c_str(), mGyml.c_str());
+					}
+					continue;
+				}
+
+				std::string ResolvedTargetBoneName;
+				application::file::game::bfres::BfresFile::Skeleton::Bone* TargetBone = FindBoneByName(MainModel, Slot.mTargetBoneName, &ResolvedTargetBoneName);
+				if (TargetBone == nullptr)
+				{
+					application::util::Logger::Warning("EquipmentDebug", "Failed target bone for slot=%s actor=%s requestedBone=%s owner=%s preview=[%s]",
+						Slot.mSlotKey.c_str(), Gyml.c_str(), Slot.mTargetBoneName.c_str(), mGyml.c_str(), BuildBoneDebugPreview(MainModel).c_str());
+					continue;
+				}
+				application::util::Logger::Info("EquipmentDebug", "Resolved target bone for slot=%s actor=%s requestedBone=%s matchedBone=%s owner=%s",
+					Slot.mSlotKey.c_str(), Gyml.c_str(), Slot.mTargetBoneName.c_str(), ResolvedTargetBoneName.c_str(), mGyml.c_str());
+
+				application::file::game::bfres::BfresFile::Model& EquipmentModel = Renderer->mBfresFile->Models.GetByIndex(0).mValue;
+				float ScaleRatio = 1.0f;
+				if (Slot.mSlotKey == "EquipmentUser_Bow")
+				{
+					ScaleRatio = BowScaleRatio;
+				}
+				else if (Slot.mSlotKey == "EquipmentUser_Shield")
+				{
+					ScaleRatio = ShieldScaleRatio;
+				}
+				else if (Slot.mSlotKey == "EquipmentUser_Weapon")
+				{
+					const std::string LowerGyml = ToLowerCopy(Gyml);
+					if (LowerGyml.starts_with("weapon_sword_"))
+					{
+						ScaleRatio = SmallSwordScaleRatio;
+					}
+					else if (LowerGyml.starts_with("weapon_lsword_"))
+					{
+						ScaleRatio = LargeSwordScaleRatio;
+					}
+					else if (LowerGyml.starts_with("weapon_spear_"))
+					{
+						ScaleRatio = SpearScaleRatio;
+					}
+				}
+
+				glm::mat4 ScaleMatrix(1.0f);
+				ScaleMatrix[0][0] = ScaleRatio;
+				ScaleMatrix[1][1] = ScaleRatio;
+				ScaleMatrix[2][2] = ScaleRatio;
+				EquipmentAttachment Attachment;
+				Attachment.mSlotKey = Slot.mSlotKey;
+				Attachment.mActorName = Gyml;
+				Attachment.mBfresRenderer = Renderer;
+				Attachment.mAttachmentMatrix = TargetBone->WorldMatrix;
+				Attachment.mModelCorrectionMatrix = ScaleMatrix * BuildAttachmentCorrectionMatrix(EquipmentModel, Slot.mSourceBoneName);
+				Attachment.mEnabled = true;
+				mEquipmentAttachments.push_back(std::move(Attachment));
 			}
 		}
 
