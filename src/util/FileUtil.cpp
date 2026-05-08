@@ -24,9 +24,18 @@ namespace application::util
 	{
 		if (Replaceable && application::manager::ProjectMgr::IsAnyProjectSelected())
 		{
-			const std::string ReplaceablePath = gCurrentDirectory + "/WorkingDir/Projects/" + application::manager::ProjectMgr::gProject + "/romfs/" + LocalPath;
-			if (FileExists(ReplaceablePath))
-				return ReplaceablePath;
+			const std::string ProjectRoot = gCurrentDirectory + "/WorkingDir/Projects/" + application::manager::ProjectMgr::gProject;
+			const std::string UnderRomFs = ProjectRoot + "/romfs/" + LocalPath;
+			if (FileExists(UnderRomFs))
+			{
+				return UnderRomFs;
+			}
+			// Some repos mirror romfs at project root without a romfs/ folder.
+			const std::string FlatProject = ProjectRoot + "/" + LocalPath;
+			if (FileExists(FlatProject))
+			{
+				return FlatProject;
+			}
 		}
 
 		return gRomFSPath + "/" + LocalPath;
@@ -34,9 +43,18 @@ namespace application::util
 
 	std::string FileUtil::GetBfresFilePath(const std::string& Name)
 	{
-		const std::string ReplaceablePath = gCurrentDirectory + "/WorkingDir/Projects/" + application::manager::ProjectMgr::gProject + "/romfs/Model/" + Name + ".mc";
-		if (FileExists(ReplaceablePath))
-			return ReplaceablePath;
+		const std::string ProjectRoot = gCurrentDirectory + "/WorkingDir/Projects/" + application::manager::ProjectMgr::gProject;
+		const std::string UnderRomFs = ProjectRoot + "/romfs/Model/" + Name + ".mc";
+		if (FileExists(UnderRomFs))
+		{
+			return UnderRomFs;
+		}
+
+		const std::string FlatProject = ProjectRoot + "/Model/" + Name + ".mc";
+		if (application::manager::ProjectMgr::IsAnyProjectSelected() && FileExists(FlatProject))
+		{
+			return FlatProject;
+		}
 
 		return gRomFSPath + "/Model/" + Name + ".mc";
 	}
