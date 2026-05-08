@@ -44,29 +44,7 @@ namespace application::rendering::map_editor
 {
     void UIMapEditor::LogTexturePatternDebug(const application::game::Scene::BancEntityRenderInfo& RenderInfo) const
     {
-        const application::game::BancEntity* Entity = RenderInfo.mEntity;
-        if (Entity == nullptr)
-        {
-            return;
-        }
-
-        application::util::Logger::Info("TexturePatternDebug", "Actor=%s Hash=%llu SRTHash=%u", Entity->mGyml.c_str(), static_cast<unsigned long long>(Entity->mHash), Entity->mSRTHash);
-        application::util::Logger::Info("TexturePatternDebug", "ModelProject=%s Fmab=%s Frame=%d OverrideKey=%s",
-            Entity->mTexturePatternModelProjectName.c_str(),
-            Entity->mTexturePatternAnimationName.c_str(),
-            Entity->mTexturePatternFrame,
-            Entity->mTexturePatternOverrideKey.c_str());
-
-        if (Entity->mTexturePatternAlbedoOverridesByMaterial.empty())
-        {
-            application::util::Logger::Warning("TexturePatternDebug", "No material albedo overrides were resolved for selected actor");
-            return;
-        }
-
-        for (const auto& [MaterialName, TextureName] : Entity->mTexturePatternAlbedoOverridesByMaterial)
-        {
-            application::util::Logger::Info("TexturePatternDebug", "Override %s -> %s", MaterialName.c_str(), TextureName.c_str());
-        }
+        static_cast<void>(RenderInfo);
     }
 
     application::gl::Shader* UIMapEditor::gInstancedShader = nullptr;
@@ -749,9 +727,9 @@ namespace application::rendering::map_editor
                 StartPosByml.GetNodes()[0].GetChild(mScene.mBcettName)->GetChild("Trans")->GetChild(1)->SetValue<float>(RenderInfo->mTranslate.y);
                 StartPosByml.GetNodes()[0].GetChild(mScene.mBcettName)->GetChild("Trans")->GetChild(2)->SetValue<float>(RenderInfo->mTranslate.z);
 
-                StartPosByml.GetNodes()[0].GetChild(mScene.mBcettName)->GetChild("Rot")->GetChild(0)->SetValue<float>(glm::radians(RenderInfo->mRotate.x));
-                StartPosByml.GetNodes()[0].GetChild(mScene.mBcettName)->GetChild("Rot")->GetChild(1)->SetValue<float>(glm::radians(RenderInfo->mRotate.y));
-                StartPosByml.GetNodes()[0].GetChild(mScene.mBcettName)->GetChild("Rot")->GetChild(2)->SetValue<float>(glm::radians(RenderInfo->mRotate.z));
+                StartPosByml.GetNodes()[0].GetChild(mScene.mBcettName)->GetChild("Rot")->GetChild(0)->SetValue<float>(RenderInfo->mRotate.x);
+                StartPosByml.GetNodes()[0].GetChild(mScene.mBcettName)->GetChild("Rot")->GetChild(1)->SetValue<float>(RenderInfo->mRotate.y);
+                StartPosByml.GetNodes()[0].GetChild(mScene.mBcettName)->GetChild("Rot")->GetChild(2)->SetValue<float>(RenderInfo->mRotate.z);
             }
 
             std::filesystem::create_directories(application::util::FileUtil::GetSaveFilePath("Banc/" + mScene.GetSceneTypeName(mScene.mSceneType) + "/StartPos"));
@@ -982,14 +960,14 @@ namespace application::rendering::map_editor
 
     void UIMapEditor::EvaluateTemplateWorldTransform(const application::game::BancEntity& LocalActor, glm::vec3& OutTranslate, glm::vec3& OutRotate, glm::vec3& OutScale) const
     {
-        glm::quat PreviewRotation = glm::quat(glm::radians(mTemplatePreviewState.mRotate));
-        glm::quat ActorRotation = glm::quat(glm::radians(LocalActor.mRotate));
+        glm::quat PreviewRotation(glm::radians(mTemplatePreviewState.mRotate));
+        glm::quat ActorRotation(glm::vec3(LocalActor.mRotate));
 
         glm::vec3 ScaledLocalTranslate = LocalActor.mTranslate * mTemplatePreviewState.mScale;
         OutTranslate = mTemplatePreviewState.mTranslate + PreviewRotation * ScaledLocalTranslate;
 
         glm::quat WorldRotation = PreviewRotation * ActorRotation;
-        OutRotate = glm::degrees(glm::eulerAngles(WorldRotation));
+        OutRotate = glm::eulerAngles(WorldRotation);
         OutScale = LocalActor.mScale * mTemplatePreviewState.mScale;
     }
 
@@ -1075,6 +1053,7 @@ namespace application::rendering::map_editor
         for (PendingPlacementEntity& Pending : PendingEntities)
         {
             EvaluateTemplateWorldTransform(Pending.mTemplateEntity, Pending.mSpawnEntity.mTranslate, Pending.mSpawnEntity.mRotate, Pending.mSpawnEntity.mScale);
+            Pending.mSpawnEntity.InitializeRotationPersistenceFromCurrent();
             mScene.mBancEntities.push_back(Pending.mSpawnEntity);
         }
 
@@ -1137,9 +1116,9 @@ namespace application::rendering::map_editor
             glm::mat4& ModelMatrix = InstanceMatrix[0];
             ModelMatrix = glm::mat4(1.0f);
             ModelMatrix = glm::translate(ModelMatrix, ActorTranslate);
-            ModelMatrix = glm::rotate(ModelMatrix, glm::radians(ActorRotate.z), glm::vec3(0.0, 0.0f, 1.0));
-            ModelMatrix = glm::rotate(ModelMatrix, glm::radians(ActorRotate.y), glm::vec3(0.0f, 1.0, 0.0));
-            ModelMatrix = glm::rotate(ModelMatrix, glm::radians(ActorRotate.x), glm::vec3(1.0, 0.0f, 0.0f));
+            ModelMatrix = glm::rotate(ModelMatrix, ActorRotate.z, glm::vec3(0.0, 0.0f, 1.0));
+            ModelMatrix = glm::rotate(ModelMatrix, ActorRotate.y, glm::vec3(0.0f, 1.0, 0.0));
+            ModelMatrix = glm::rotate(ModelMatrix, ActorRotate.x, glm::vec3(1.0, 0.0f, 0.0f));
             ModelMatrix = glm::scale(ModelMatrix, ActorScale);
 
             LocalActor.mBfresRenderer->Draw(InstanceMatrix, LocalActor.mTexturePatternFrame, &LocalActor.mTexturePatternAlbedoOverridesByMaterial);
@@ -1957,10 +1936,16 @@ namespace application::rendering::map_editor
 
                     ImGui::TableSetColumnIndex(0);
                     ImGui::Text("Rotation");
-                    ImGuiExt::CheckVec3fInputRightClick("RotationPopUp", &RenderInfo->mRotate.x, true);
+                    ImGuiExt::CheckVec3fInputRightClick("RotationPopUp", &RenderInfo->mEntity->mRotateInspectorEulerDeg.x, true);
                     ImGui::TableNextColumn();
                     ImGui::PushItemWidth(ImGui::GetCurrentTable()->Columns[1].WidthMax);
-                    SyncBancEntity |= ImGuiExt::InputFloat3Colored("##Rotation", &RenderInfo->mRotate.x, ImVec4(0.22f, 0.02f, 0.03f, 1.0f), ImVec4(0.02f, 0.22f, 0.03f, 1.0f), ImVec4(0.02f, 0.03f, 0.22f, 1.0f));
+                    if (ImGuiExt::InputFloat3Colored("##Rotation", &RenderInfo->mEntity->mRotateInspectorEulerDeg.x, ImVec4(0.22f, 0.02f, 0.03f, 1.0f), ImVec4(0.02f, 0.22f, 0.03f, 1.0f), ImVec4(0.02f, 0.03f, 0.22f, 1.0f)))
+                    {
+                        RenderInfo->mRotate = glm::radians(RenderInfo->mEntity->mRotateInspectorEulerDeg);
+                        RenderInfo->mEntity->mRotate = RenderInfo->mRotate;
+                        RenderInfo->mEntity->NotifyRotateEditedByUser();
+                        SyncBancEntity = true;
+                    }
                     ImGui::PopItemWidth();
                     ImGui::TableNextRow();
 
@@ -2731,9 +2716,9 @@ namespace application::rendering::map_editor
     {
         glm::mat4 ModelMatrix(1.0f);
         ModelMatrix = glm::translate(ModelMatrix, RenderInfo.mTranslate);
-        ModelMatrix = glm::rotate(ModelMatrix, glm::radians(RenderInfo.mRotate.z), glm::vec3(0.0f, 0.0f, 1.0f));
-        ModelMatrix = glm::rotate(ModelMatrix, glm::radians(RenderInfo.mRotate.y), glm::vec3(0.0f, 1.0f, 0.0f));
-        ModelMatrix = glm::rotate(ModelMatrix, glm::radians(RenderInfo.mRotate.x), glm::vec3(1.0f, 0.0f, 0.0f));
+        ModelMatrix = glm::rotate(ModelMatrix, RenderInfo.mRotate.z, glm::vec3(0.0f, 0.0f, 1.0f));
+        ModelMatrix = glm::rotate(ModelMatrix, RenderInfo.mRotate.y, glm::vec3(0.0f, 1.0f, 0.0f));
+        ModelMatrix = glm::rotate(ModelMatrix, RenderInfo.mRotate.x, glm::vec3(1.0f, 0.0f, 0.0f));
         ModelMatrix = glm::scale(ModelMatrix, RenderInfo.mScale);
         return ModelMatrix;
     }
@@ -2903,6 +2888,11 @@ namespace application::rendering::map_editor
         mPropertiesWindowInfo.mSetExternalParametersColumnWidth = true;
         mPropertiesWindowInfo.mSetPresenceColumnWidth = true;
         mPropertiesWindowInfo.mSetPhivePlacementColumnWidth = true;
+
+        if (application::game::Scene::BancEntityRenderInfo* RI = GetSelectedActor(); RI != nullptr && RI->mEntity != nullptr)
+        {
+            RI->mEntity->SyncRotateInspectorEulerFromRadians();
+        }
     }
 
     void UIMapEditor::SelectNearestMergedBancEntityInstance(std::vector<application::game::BancEntity>* MergedActor, application::game::BancEntity& Entity, const glm::vec3& Pos)
@@ -3337,9 +3327,9 @@ namespace application::rendering::map_editor
 
                 GLMModel = glm::translate(GLMModel, Entity.mTranslate);
 
-                GLMModel = glm::rotate(GLMModel, glm::radians(Entity.mRotate.z), glm::vec3(0.0, 0.0f, 1.0));
-                GLMModel = glm::rotate(GLMModel, glm::radians(Entity.mRotate.y), glm::vec3(0.0f, 1.0, 0.0));
-                GLMModel = glm::rotate(GLMModel, glm::radians(Entity.mRotate.x), glm::vec3(1.0, 0.0f, 0.0));
+                GLMModel = glm::rotate(GLMModel, Entity.mRotate.z, glm::vec3(0.0, 0.0f, 1.0));
+                GLMModel = glm::rotate(GLMModel, Entity.mRotate.y, glm::vec3(0.0f, 1.0, 0.0));
+                GLMModel = glm::rotate(GLMModel, Entity.mRotate.x, glm::vec3(1.0, 0.0f, 0.0));
 
                 GLMModel = glm::scale(GLMModel, Entity.mScale);
 
@@ -3371,7 +3361,7 @@ namespace application::rendering::map_editor
         }
         else if (application::game::Scene::BancEntityRenderInfo* Info = GetSelectedActor(); Info != nullptr)
         {
-            ImGuizmo::RecomposeMatrixFromComponents(&Info->mTranslate.x, &Info->mRotate.x, &Info->mScale.x, mGuizmoObjectMatrix);
+            ImGuizmo::RecomposeMatrixFromComponents(&Info->mTranslate.x, &Info->mEntity->mRotateInspectorEulerDeg.x, &Info->mScale.x, mGuizmoObjectMatrix);
 
             ImGuizmo::SetRect(ImGui::GetWindowPos().x + ImGui::GetStyle().WindowPadding.x, ImGui::GetWindowPos().y + ImGui::GetStyle().WindowPadding.y, WindowSize.x, WindowSize.y);
 
@@ -3387,9 +3377,28 @@ namespace application::rendering::map_editor
             else
             {
                 application::game::Scene::BancEntityRenderInfo* RenderInfo = GetSelectedActor();
-                if (RenderInfo != nullptr)
+                if (RenderInfo != nullptr && RenderInfo->mEntity != nullptr)
                 {
-                    ImGuizmo::DecomposeMatrixToComponents(mGuizmoObjectMatrix, &RenderInfo->mTranslate.x, &RenderInfo->mRotate.x, &RenderInfo->mScale.x);
+                    glm::vec3 DecomposedEulerDeg{};
+                    ImGuizmo::DecomposeMatrixToComponents(mGuizmoObjectMatrix, &RenderInfo->mTranslate.x, &DecomposedEulerDeg.x, &RenderInfo->mScale.x);
+
+                    glm::vec3 NewRotateRad = glm::radians(DecomposedEulerDeg);
+                    constexpr float RotEps = 1e-4f;
+                    const auto RotMoved = [&](const glm::vec3& A, const glm::vec3& B)
+                        {
+                            return std::fabs(A.x - B.x) > RotEps || std::fabs(A.y - B.y) > RotEps || std::fabs(A.z - B.z) > RotEps;
+                        };
+
+                    if (RotMoved(RenderInfo->mRotate, NewRotateRad))
+                    {
+                        RenderInfo->mRotate = NewRotateRad;
+                        RenderInfo->mEntity->mRotateInspectorEulerDeg = DecomposedEulerDeg;
+                        RenderInfo->mEntity->mRotate = NewRotateRad;
+                        RenderInfo->mEntity->NotifyRotateEditedByUser();
+                    }
+
+                    RenderInfo->mEntity->SyncRotateInspectorEulerFromRadians();
+
                     mScene.SyncBancEntity(RenderInfo);
                 }
             }

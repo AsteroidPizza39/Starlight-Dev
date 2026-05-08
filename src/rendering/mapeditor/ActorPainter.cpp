@@ -370,17 +370,21 @@ namespace application::rendering::map_editor
 						RenderInfo.mScale.y = mScaleMin.y + static_cast <float> (rand()) / (static_cast <float> (RAND_MAX / (mScaleMax.y - mScaleMin.y)));
 						RenderInfo.mScale.z = mScaleMin.z + static_cast <float> (rand()) / (static_cast <float> (RAND_MAX / (mScaleMax.z - mScaleMin.z)));
 
-						glm::vec3 TerrainNormalRot = NormalToEuler(ActorTerrainIntersection.second);
+						glm::vec3 TerrainNormalRotDeg = NormalToEuler(ActorTerrainIntersection.second);
 
-						RenderInfo.mRotate.x = TerrainNormalRot.x + mRotMin.x + static_cast <float> (rand()) / (static_cast <float> (RAND_MAX / (mRotMax.x - mRotMin.x)));
-						RenderInfo.mRotate.y = TerrainNormalRot.y + mRotMin.y + static_cast <float> (rand()) / (static_cast <float> (RAND_MAX / (mRotMax.y - mRotMin.y)));
-						RenderInfo.mRotate.z = TerrainNormalRot.z + mRotMin.z + static_cast <float> (rand()) / (static_cast <float> (RAND_MAX / (mRotMax.z - mRotMin.z)));
+						const glm::vec3 RandDegExtra(
+							mRotMin.x + static_cast<float>(rand()) / (static_cast<float>(RAND_MAX / (mRotMax.x - mRotMin.x))),
+							mRotMin.y + static_cast<float>(rand()) / (static_cast<float>(RAND_MAX / (mRotMax.y - mRotMin.y))),
+							mRotMin.z + static_cast<float>(rand()) / (static_cast<float>(RAND_MAX / (mRotMax.z - mRotMin.z))));
+
+						RenderInfo.mRotate = glm::radians(TerrainNormalRotDeg + RandDegExtra);
 
 						Entity.value().mBancType = mBancType;
 
 						Entity.value().mPhive.mPlacement["ID"] = Entity.value().mHash;
 
 						MapEditor->mScene.SyncBancEntity(&RenderInfo);
+						Entity.value().InitializeRotationPersistenceFromCurrent();
 
 						if (mBancType != application::game::BancEntity::BancType::MERGED)
 						{

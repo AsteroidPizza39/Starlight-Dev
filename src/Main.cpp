@@ -1,6 +1,7 @@
 ﻿#include <Editor.h>
 #include <manager/UIMgr.h>
 #include <manager/AINBNodeMgr.h>
+#include <manager/ProjectMgr.h>
 #include <util/backward.h>
 #include <util/Logger.h>
 
@@ -49,6 +50,7 @@ int main(int argc, char* argv[])
     }
 
     application::Editor::InitializeRomFSPathDependant();
+    application::manager::ProjectMgr::RefreshTrialOfTheChosenHeroFlag();
 
     //application::manager::AINBNodeMgr::GenerateNodeDefinitionFile();
 

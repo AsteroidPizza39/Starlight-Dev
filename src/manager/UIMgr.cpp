@@ -562,6 +562,7 @@ namespace application::manager
                     {
                         application::util::FileUtil::ValidatePaths();
                         application::Editor::InitializeRomFSPathDependant();
+                        application::manager::ProjectMgr::RefreshTrialOfTheChosenHeroFlag();
 
                         if (application::util::FileUtil::gPathsValid)
                         {

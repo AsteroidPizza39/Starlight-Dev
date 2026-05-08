@@ -37,6 +37,11 @@ namespace application::gl
 			GLenum mRenderStateDisplayFace = GL_NONE;
 			GLenum mIndexFormat = GL_UNSIGNED_INT;
 
+			std::string mGsysPass;
+			uint16_t mGsysPassSortKey = 100;
+			/** Seal vs no_setting coplanar hint from mesh proximity (vertices/triangles in BFRES vertex space), not actor origin or draw instance transforms; polygon offset when true. */
+			bool mGsysSealProximityDepthBias = false;
+
 			application::gl::Texture* mAlbedoTexture = nullptr;
 			application::file::game::texture::TexToGoFile* mAlbedoTexToGoFile = nullptr;
 			std::vector<application::file::game::texture::TexToGoFile*> mTextureCandidates;

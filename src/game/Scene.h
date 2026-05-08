@@ -38,7 +38,7 @@ namespace application::game
 			uint32_t mEntityIndex = 0;
 			float mSphereScreenSize = 0.0f;
 			glm::vec3 mTranslate = glm::vec3(0.0f, 0.0f, 0.0f);
-			glm::vec3 mRotate = glm::vec3(0.0f, 0.0f, 0.0f);
+			glm::vec3 mRotate = glm::vec3(0.0f, 0.0f, 0.0f); // euler XYZ radians (BYAML Rotate)
 			glm::vec3 mScale = glm::vec3(1.0f, 1.0f, 1.0f);
 		};
 

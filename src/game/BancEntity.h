@@ -168,6 +168,11 @@ namespace application::game
 		bool FromGyml(const std::string& Gyml);
 		application::file::game::byml::BymlFile::Node ToByml();
 
+		/** Euler XYZ in radians — matches BYAML / ingame Rotate. Inspector UI shows degrees separately. */
+		void NotifyRotateEditedByUser();
+		void SyncRotateInspectorEulerFromRadians();
+		void InitializeRotationPersistenceFromCurrent();
+
 		void ParseDynamicTypeParameter(application::file::game::byml::BymlFile::Node& Node, const std::string& Key, std::map<std::string, std::variant<std::string, bool, int32_t, int64_t, uint32_t, uint64_t, float, glm::vec3>>& Map);
 		void WriteDynamicTypeParameter(application::file::game::byml::BymlFile::Node& Node, const std::string& Key, std::map<std::string, std::variant<std::string, bool, int32_t, int64_t, uint32_t, uint64_t, float, glm::vec3>>& Map, bool SkipEmptyCheck = false);
 
@@ -178,8 +183,12 @@ namespace application::game
 		uint32_t mSRTHash = 0;
 
 		glm::vec3 mTranslate = glm::vec3(0);
-		glm::vec3 mRotate = glm::vec3(0); //Degrees
+		glm::vec3 mRotate = glm::vec3(0);
 		glm::vec3 mScale = glm::vec3(1, 1, 1);
+
+		glm::vec3 mRotateSerializedRadiansSnap = glm::vec3(0);
+		bool mRotateUserEdited = false;
+		glm::vec3 mRotateInspectorEulerDeg = glm::vec3(0);
 
 		bool mBakeable = false;
 		bool mIsPhysicsStable = false;

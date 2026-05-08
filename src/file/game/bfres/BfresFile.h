@@ -1182,7 +1182,7 @@ namespace application::file::game::bfres
 
 				virtual void Read(BfresBinaryVectorReader& Reader) override;
 				void InitBuffers(BfresBinaryVectorReader& Reader, BufferMemoryPool Pool);
-				std::vector<uint32_t> GetIndices();
+				std::vector<uint32_t> GetIndices() const;
 			};
 
 			struct ShapeBounding : public BfresBinaryVectorReader::ReadableObject

@@ -69,7 +69,7 @@ namespace application::manager
 
 
 		gProject = Name;
-		gIsTrialOfTheChosenHeroProject = std::filesystem::exists(application::util::FileUtil::GetRomFSFilePath("Banc/GameBancParam/TrialField.game__banc__GameBancParam.bgyml"));
+		RefreshTrialOfTheChosenHeroFlag();
 
 		application::manager::ActorPackMgr::LoadActorList();
 		application::Editor::InitializeDefaultModels();
@@ -112,9 +112,21 @@ namespace application::manager
 		return !gProject.empty();
 	}
 
+	void ProjectMgr::RefreshTrialOfTheChosenHeroFlag()
+	{
+		if (!IsAnyProjectSelected())
+		{
+			gIsTrialOfTheChosenHeroProject = false;
+			return;
+		}
+		gIsTrialOfTheChosenHeroProject = application::util::FileUtil::FileExists(
+			application::util::FileUtil::GetRomFSFilePath("Banc/GameBancParam/TrialField.game__banc__GameBancParam.bgyml"));
+	}
+
 	void ProjectMgr::UnloadProject()
 	{
 		gProject = "";
+		gIsTrialOfTheChosenHeroProject = false;
 		for (auto& Func : gProjectChangeCallbacks)
 		{
 			Func("");

@@ -21,6 +21,8 @@ namespace application::manager
 		void UnloadProject();
 		void SelectProject(const std::string& Name);
 		bool IsAnyProjectSelected();
+		/** Recompute gIsTrialOfTheChosenHeroProject from RomFS (call after Path config / project change). */
+		void RefreshTrialOfTheChosenHeroFlag();
 
 		void ExportProject(bool GenerateRSTB);
 	}

@@ -2,6 +2,8 @@
 
 #include "BfresFile.h"
 
+#include <climits>
+
 namespace application::file::game::bfres
 {
 	BfresBinaryVectorReader::BfresBinaryVectorReader(std::vector<unsigned char> Bytes, std::unordered_map<uint64_t, std::string>& StringCache, bool BigEndian) : BinaryVectorReader(Bytes, BigEndian), mStringCache(StringCache)
@@ -343,13 +345,25 @@ namespace application::file::game::bfres
 			return mStringCache[Offset];
 		}
 
-		uint32_t Pos = this->GetPosition();
+		const uint32_t BufferSize = GetSize();
+		if (Offset > static_cast<uint64_t>(INT_MAX) || Offset + 2ULL > static_cast<uint64_t>(BufferSize))
+		{
+			return {};
+		}
 
-		this->Seek(Offset, BfresBinaryVectorReader::Position::Begin);
+		const int Pos = GetPosition();
 
-		uint16_t Size = ReadUInt16();
-		std::string String;
-		String.resize(Size);
+		this->Seek(static_cast<int>(Offset), BfresBinaryVectorReader::Position::Begin);
+
+		const uint16_t Size = ReadUInt16();
+		const uint64_t EndExclusive = Offset + 2ULL + static_cast<uint64_t>(Size);
+		if (EndExclusive > static_cast<uint64_t>(BufferSize))
+		{
+			this->Seek(Pos, BfresBinaryVectorReader::Position::Begin);
+			return {};
+		}
+
+		std::string String(static_cast<size_t>(Size), '\0');
 		ReadStruct(String.data(), Size);
 
 		this->Seek(Pos, BfresBinaryVectorReader::Position::Begin);

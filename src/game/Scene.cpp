@@ -227,16 +227,28 @@ namespace application::game
 		mBcettName = std::filesystem::path(StaticBymlPath).stem().string();
 		application::util::General::ReplaceString(mBcettName, "_Static.bcett.byml", "");
 
+		application::util::Logger::Info("LoadDebug", "Scene::Load begin Type=%d Bcett=%s Static=%s Dynamic=%s",
+			static_cast<int>(Type), mBcettName.c_str(), StaticBymlPath.c_str(), DynamicBymlPath.c_str());
+
 		mStaticBymlFile.Initialize(application::file::game::ZStdBackend::Decompress(StaticBymlPath));
 		mDynamicBymlFile.Initialize(application::file::game::ZStdBackend::Decompress(DynamicBymlPath));
+		application::util::Logger::Info("LoadDebug", "Scene::Load BYMLs decompressed");
 
 		auto DecodeByml = [this](application::file::game::byml::BymlFile& File, application::game::BancEntity::BancType Type)
 			{
 				if (!File.HasChild("Actors")) 
 					return;
 
-				for (application::file::game::byml::BymlFile::Node& ActorNode : File.GetNode("Actors")->GetChildren())
+				auto& ActorNodes = File.GetNode("Actors")->GetChildren();
+				const uint32_t TotalActors = static_cast<uint32_t>(ActorNodes.size());
+				const char* TypeLabel = (Type == application::game::BancEntity::BancType::STATIC) ? "STATIC" : "DYNAMIC";
+				application::util::Logger::Info("LoadDebug", "DecodeByml begin Type=%s ActorCount=%u", TypeLabel, TotalActors);
+				uint32_t ActorIndex = 0;
+				for (application::file::game::byml::BymlFile::Node& ActorNode : ActorNodes)
 				{
+					std::string ActorGyml = ActorNode.HasChild("Gyaml") ? ActorNode.GetChild("Gyaml")->GetValue<std::string>() : std::string("<no-gyaml>");
+					application::util::Logger::Info("LoadDebug", "Actor %u/%u Type=%s Gyml=%s", ActorIndex, TotalActors, TypeLabel, ActorGyml.c_str());
+
 					application::game::BancEntity Entity;
 					if (!Entity.FromByml(ActorNode))
 					{
@@ -250,12 +262,15 @@ namespace application::game
 							SRTHash = ActorNode.GetChild("SRTHash")->GetValue<uint32_t>();
 
 						application::util::Logger::Error("Scene", "Error while parsing BancEntity, Hash: %lu, SRTHash: %u", Hash, SRTHash);
+						++ActorIndex;
 						continue;
 					}
 					Entity.mBancType = Type;
 
 					mBancEntities.push_back(Entity);
+					++ActorIndex;
 				}
+				application::util::Logger::Info("LoadDebug", "DecodeByml end Type=%s ActorCount=%u", TypeLabel, TotalActors);
 			};
 
 		auto GetActorCount = [](application::file::game::byml::BymlFile& File)
@@ -271,10 +286,13 @@ namespace application::game
 		DecodeByml(mDynamicBymlFile, application::game::BancEntity::BancType::DYNAMIC);
 
 		mBancEntities.shrink_to_fit();
+		application::util::Logger::Info("LoadDebug", "Scene::Load actors decoded TotalEntities=%u", static_cast<uint32_t>(mBancEntities.size()));
 
 		GenerateDrawList();
+		application::util::Logger::Info("LoadDebug", "Scene::Load draw list generated");
 
 		application::manager::GameDataListMgr::LoadActorGameData(*this);
+		application::util::Logger::Info("LoadDebug", "Scene::Load actor game data loaded");
 
 		switch (mSceneType)
 		{
@@ -301,6 +319,7 @@ namespace application::game
 		{
 			mGameBancParam = application::file::game::byml::BymlFile(application::util::FileUtil::GetRomFSFilePath(mGameBancParamPath));
 		}
+		application::util::Logger::Info("LoadDebug", "Scene::Load GameBancParam loaded path=%s", mGameBancParamPath.c_str());
 
 		switch (mSceneType)
 		{
@@ -332,7 +351,9 @@ namespace application::game
 			mStaticCompoundImplementation = std::make_unique<application::tool::scene::StaticCompoundImplementationBase>();
 			application::util::Logger::Info("Scene", "No StaticCompound implementation found");
 		}
+		application::util::Logger::Info("LoadDebug", "Scene::Load StaticCompound created, initializing");
 		mStaticCompoundImplementation->Initialize();
+		application::util::Logger::Info("LoadDebug", "Scene::Load StaticCompound initialized");
 
 		switch (mSceneType)
 		{
@@ -355,7 +376,9 @@ namespace application::game
 			mNavMeshImplementation = std::make_unique<application::tool::scene::NavMeshImplementationBase>();
 			application::util::Logger::Info("Scene", "No NavMesh implementation found");
 		}
+		application::util::Logger::Info("LoadDebug", "Scene::Load NavMesh created, initializing");
 		mNavMeshImplementation->Initialize();
+		application::util::Logger::Info("LoadDebug", "Scene::Load NavMesh initialized");
 
 		switch (mSceneType)
 		{
@@ -372,6 +395,7 @@ namespace application::game
 		default:
 			application::util::Logger::Info("Scene", "No terrain will be loaded for this scene");
 		}
+		application::util::Logger::Info("LoadDebug", "Scene::Load terrain phase complete");
 
 		if (mStaticBymlFile.HasChild("AiGroups"))
 		{
@@ -437,6 +461,7 @@ namespace application::game
 		}
 
 		application::util::Logger::Info("Scene", "Scene loaded, unique BancEntity count: %u, AiGroup count: %u", mBancEntities.size(), mAiGroups.size());
+		application::util::Logger::Info("LoadDebug", "Scene::Load end Bcett=%s", mBcettName.c_str());
 	}
 
 	bool Scene::IsLoaded()
@@ -455,7 +480,7 @@ namespace application::game
 
 
 		//Childs translation depending on parents rotation (orbit)
-		glm::vec3 ParentRotationRadians = glm::radians(Parent->mRotate);
+		glm::vec3 ParentRotationRadians = Parent->mRotate;
 		glm::mat4 Transform = glm::mat4(1.0f);
 
 		Transform = glm::translate(Transform, Parent->mTranslate);
@@ -469,12 +494,12 @@ namespace application::game
 
 
 		//Childs rotation
-		glm::vec3 ChildRotationRadians = glm::radians(ChildRenderInfo.mEntity->mRotate);
+		glm::vec3 ChildRotationRadians = ChildRenderInfo.mEntity->mRotate;
 		glm::quat ParentQuat = glm::quat(glm::vec3(ParentRotationRadians.x, ParentRotationRadians.y, ParentRotationRadians.z));
 		glm::quat ChildQuat = glm::quat(glm::vec3(ChildRotationRadians.x, ChildRotationRadians.y, ChildRotationRadians.z));
 		glm::quat CombinedQuat = ParentQuat * ChildQuat;
 		glm::vec3 CombinedRotRad = glm::eulerAngles(CombinedQuat);
-		ChildRenderInfo.mRotate = glm::degrees(CombinedRotRad);
+		ChildRenderInfo.mRotate = CombinedRotRad;
 	}
 
 	void Scene::UpdateChildsBancEntity(BancEntityRenderInfo* RenderInfo)
@@ -483,14 +508,15 @@ namespace application::game
 
 
 
-		glm::vec3 ParentRotationRadians = glm::radians(RenderInfo->mMergedActorParent->mRotate);
+		glm::vec3 ParentRotationRadians = RenderInfo->mMergedActorParent->mRotate;
 		glm::quat ParentQuat = glm::quat(glm::vec3(ParentRotationRadians.x, ParentRotationRadians.y, ParentRotationRadians.z));
-		glm::vec3 FinalRotationRadians = glm::radians(RenderInfo->mRotate);
+		glm::vec3 FinalRotationRadians = RenderInfo->mRotate;
 		glm::quat FinalQuat = glm::quat(glm::vec3(FinalRotationRadians.x, FinalRotationRadians.y, FinalRotationRadians.z));
 		glm::quat InverseParentQuat = glm::conjugate(ParentQuat);
 		glm::quat ChildRawQuat = InverseParentQuat * FinalQuat;
 		glm::vec3 ChildRawRotationRad = glm::eulerAngles(ChildRawQuat);
-		RenderInfo->mEntity->mRotate = glm::degrees(ChildRawRotationRad);
+		RenderInfo->mEntity->mRotate = ChildRawRotationRad;
+		RenderInfo->mEntity->NotifyRotateEditedByUser();
 
 
 
@@ -609,6 +635,8 @@ namespace application::game
 
 		mStaticCompoundImplementation->SyncBancEntityHashes(Entity, Template.mHash, Entity.mHash);
 
+		Entity.InitializeRotationPersistenceFromCurrent();
+
 		return Entity;
 	}
 
@@ -694,9 +722,9 @@ namespace application::game
 
 			GLMModel = glm::translate(GLMModel, RenderInfo->mTranslate);
 
-			GLMModel = glm::rotate(GLMModel, glm::radians(RenderInfo->mRotate.z), glm::vec3(0.0, 0.0f, 1.0));
-			GLMModel = glm::rotate(GLMModel, glm::radians(RenderInfo->mRotate.y), glm::vec3(0.0f, 1.0, 0.0));
-			GLMModel = glm::rotate(GLMModel, glm::radians(RenderInfo->mRotate.x), glm::vec3(1.0, 0.0f, 0.0));
+			GLMModel = glm::rotate(GLMModel, RenderInfo->mRotate.z, glm::vec3(0.0, 0.0f, 1.0));
+			GLMModel = glm::rotate(GLMModel, RenderInfo->mRotate.y, glm::vec3(0.0f, 1.0, 0.0));
+			GLMModel = glm::rotate(GLMModel, RenderInfo->mRotate.x, glm::vec3(1.0, 0.0f, 0.0));
 
 			GLMModel = glm::scale(GLMModel, RenderInfo->mScale);
 

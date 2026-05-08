@@ -675,7 +675,7 @@ namespace application::file::game::bfres
         Reader.ReadStruct(IndexBuffer.data(), BufferInfo.Size);
     }
 
-    std::vector<uint32_t> BfresFile::Shape::Mesh::GetIndices()
+    std::vector<uint32_t> BfresFile::Shape::Mesh::GetIndices() const
     {
         BfresBinaryVectorReader Reader(IndexBuffer, gExternalBinaryStrings);
         std::vector<uint32_t> Indices(Header.IndexCount);

@@ -43,7 +43,7 @@ namespace application::file::tool
 
 		if (std::find(application::manager::ProjectMgr::gProjects.begin(), application::manager::ProjectMgr::gProjects.end(), application::manager::ProjectMgr::gProject) != application::manager::ProjectMgr::gProjects.end())
 		{
-			application::manager::ProjectMgr::gIsTrialOfTheChosenHeroProject = application::util::FileUtil::FileExists(application::util::FileUtil::GetRomFSFilePath("Banc/GameBancParam/TrialField.game__banc__GameBancParam.bgyml"));
+			application::manager::ProjectMgr::RefreshTrialOfTheChosenHeroFlag();
 			application::manager::AINBNodeMgr::ReloadAdditionalProjectNodes();
 
 			application::util::Logger::Info("ProjectConfig", "Loaded selected project");
@@ -52,6 +52,7 @@ namespace application::file::tool
 		{
 			application::util::Logger::Warning("ProjectConfig", "Invalid project name");
 			application::manager::ProjectMgr::gProject = "";
+			application::manager::ProjectMgr::RefreshTrialOfTheChosenHeroFlag();
 		}
 	}
 

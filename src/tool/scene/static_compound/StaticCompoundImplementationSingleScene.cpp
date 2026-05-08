@@ -27,9 +27,9 @@ namespace application::tool::scene::static_compound
 				if (application::util::Math::CompareFloatsWithTolerance(Iter->mPositionX, RenderInfo->mTranslate.x, 0.1f) && 
 					application::util::Math::CompareFloatsWithTolerance(Iter->mPositionY, RenderInfo->mTranslate.y, 0.1f) &&
 					application::util::Math::CompareFloatsWithTolerance(Iter->mPositionZ, RenderInfo->mTranslate.z, 0.1f) &&
-					application::util::Math::CompareFloatsWithTolerance(glm::degrees(Iter->mRotationX), RenderInfo->mRotate.x, 0.1f) && 
-					application::util::Math::CompareFloatsWithTolerance(glm::degrees(Iter->mRotationY), RenderInfo->mRotate.y, 0.1f) && 
-					application::util::Math::CompareFloatsWithTolerance(glm::degrees(Iter->mRotationZ), RenderInfo->mRotate.z, 0.1f)
+					application::util::Math::CompareFloatsWithTolerance(Iter->mRotationX, RenderInfo->mRotate.x, 0.1f) && 
+					application::util::Math::CompareFloatsWithTolerance(Iter->mRotationY, RenderInfo->mRotate.y, 0.1f) && 
+					application::util::Math::CompareFloatsWithTolerance(Iter->mRotationZ, RenderInfo->mRotate.z, 0.1f)
 					)
 				{
 					RenderInfo->mEntity->mBakedFluid.mBakeFluid = true;
@@ -47,7 +47,7 @@ namespace application::tool::scene::static_compound
 			for (auto Iter = mStaticCompoundFile.mWaterCylinderArray.begin(); Iter != mStaticCompoundFile.mWaterCylinderArray.end(); )
 			{
 				if (Iter->mPositionX == RenderInfo->mTranslate.x && Iter->mPositionY == RenderInfo->mTranslate.y && Iter->mPositionZ == RenderInfo->mTranslate.z
-					&& application::util::Math::CompareFloatsWithTolerance(glm::degrees(Iter->mRotationX), RenderInfo->mRotate.x, 0.1f) && application::util::Math::CompareFloatsWithTolerance(glm::degrees(Iter->mRotationY), RenderInfo->mRotate.y, 0.1f) && application::util::Math::CompareFloatsWithTolerance(glm::degrees(Iter->mRotationZ), RenderInfo->mRotate.z, 0.1f))
+					&& application::util::Math::CompareFloatsWithTolerance(Iter->mRotationX, RenderInfo->mRotate.x, 0.1f) && application::util::Math::CompareFloatsWithTolerance(Iter->mRotationY, RenderInfo->mRotate.y, 0.1f) && application::util::Math::CompareFloatsWithTolerance(Iter->mRotationZ, RenderInfo->mRotate.z, 0.1f))
 				{
 					RenderInfo->mEntity->mBakedFluid.mBakeFluid = true;
 
@@ -285,9 +285,9 @@ namespace application::tool::scene::static_compound
 				WaterBox.mScaleTimesTenX = Scale.value().x;
 				WaterBox.mScaleTimesTenY = RenderInfo->mEntity->mBakedFluid.mFluidBoxHeight;
 				WaterBox.mScaleTimesTenZ = Scale.value().y;
-				WaterBox.mRotationX = glm::radians(RenderInfo->mRotate.x);
-				WaterBox.mRotationY = glm::radians(RenderInfo->mRotate.y);
-				WaterBox.mRotationZ = glm::radians(RenderInfo->mRotate.z);
+				WaterBox.mRotationX = RenderInfo->mRotate.x;
+				WaterBox.mRotationY = RenderInfo->mRotate.y;
+				WaterBox.mRotationZ = RenderInfo->mRotate.z;
 				WaterBox.mPositionX = RenderInfo->mTranslate.x;
 				WaterBox.mPositionY = RenderInfo->mTranslate.y;
 				WaterBox.mPositionZ = RenderInfo->mTranslate.z;
@@ -521,9 +521,9 @@ namespace application::tool::scene::static_compound
 
 					GLMModel = glm::translate(GLMModel, RenderInfo->mTranslate);
 
-					GLMModel = glm::rotate(GLMModel, glm::radians(RenderInfo->mRotate.z), glm::vec3(0.0, 0.0f, 1.0));
-					GLMModel = glm::rotate(GLMModel, glm::radians(RenderInfo->mRotate.y), glm::vec3(0.0f, 1.0, 0.0));
-					GLMModel = glm::rotate(GLMModel, glm::radians(RenderInfo->mRotate.x), glm::vec3(1.0, 0.0f, 0.0));
+					GLMModel = glm::rotate(GLMModel, RenderInfo->mRotate.z, glm::vec3(0.0, 0.0f, 1.0));
+					GLMModel = glm::rotate(GLMModel, RenderInfo->mRotate.y, glm::vec3(0.0f, 1.0, 0.0));
+					GLMModel = glm::rotate(GLMModel, RenderInfo->mRotate.x, glm::vec3(1.0, 0.0f, 0.0));
 
 					GLMModel = glm::scale(GLMModel, RenderInfo->mScale);
 

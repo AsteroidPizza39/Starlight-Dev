@@ -412,6 +412,12 @@ namespace application::file::game::texture
 
 	TexToGoFile::Surface& TexToGoFile::GetSurface(uint16_t ArrayIndex)
 	{
+		if (mSurfaces.empty())
+		{
+			static TexToGoFile::Surface EmptySurface{};
+			application::util::Logger::Warning("TexToGo", "GetSurface called on TexToGoFile with no surfaces, returning empty fallback");
+			return EmptySurface;
+		}
 		return mSurfaces[mSurfaces.size() > ArrayIndex ? ArrayIndex : 0];
 	}
 

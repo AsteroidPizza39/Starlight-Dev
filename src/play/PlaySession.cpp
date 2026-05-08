@@ -450,7 +450,7 @@ namespace application::play
         prebuiltBody.mCollisionShape = data.mCollisionShape;
 
         btQuaternion quat;
-        quat.setEulerZYX(glm::radians(Job.mRotate.z), glm::radians(Job.mRotate.y), glm::radians(Job.mRotate.x));
+        quat.setEulerZYX(Job.mRotate.z, Job.mRotate.y, Job.mRotate.x);
 
         btTransform motionState;
         motionState.setIdentity();
@@ -544,7 +544,7 @@ namespace application::play
         loadedCollision.mBody = {};
 
         btQuaternion quat;
-        quat.setEulerZYX(glm::radians(Entity->mRotate.z), glm::radians(Entity->mRotate.y), glm::radians(Entity->mRotate.x));
+        quat.setEulerZYX(Entity->mRotate.z, Entity->mRotate.y, Entity->mRotate.x);
 
         btTransform motionState;
         motionState.setIdentity();
@@ -747,7 +747,7 @@ namespace application::play
                 mPlayerCurrentYaw += (angleDiff > 0 ? 1.0f : -1.0f) * maxRotationThisFrame;
             }
 
-            mPlayerEntityInfo->mRotate.y = mPlayerCurrentYaw;
+            mPlayerEntityInfo->mRotate.y = glm::radians(mPlayerCurrentYaw);
         }
 
         if (glfwGetKey(mCamera.mWindow, GLFW_KEY_SPACE) == GLFW_PRESS)
@@ -800,9 +800,9 @@ namespace application::play
     {
         glm::mat4 ModelMatrix(1.0f);
         ModelMatrix = glm::translate(ModelMatrix, RenderInfo.mTranslate);
-        ModelMatrix = glm::rotate(ModelMatrix, glm::radians(RenderInfo.mRotate.z), glm::vec3(0.0f, 0.0f, 1.0f));
-        ModelMatrix = glm::rotate(ModelMatrix, glm::radians(RenderInfo.mRotate.y), glm::vec3(0.0f, 1.0f, 0.0f));
-        ModelMatrix = glm::rotate(ModelMatrix, glm::radians(RenderInfo.mRotate.x), glm::vec3(1.0f, 0.0f, 0.0f));
+        ModelMatrix = glm::rotate(ModelMatrix, RenderInfo.mRotate.z, glm::vec3(0.0f, 0.0f, 1.0f));
+        ModelMatrix = glm::rotate(ModelMatrix, RenderInfo.mRotate.y, glm::vec3(0.0f, 1.0f, 0.0f));
+        ModelMatrix = glm::rotate(ModelMatrix, RenderInfo.mRotate.x, glm::vec3(1.0f, 0.0f, 0.0f));
         ModelMatrix = glm::scale(ModelMatrix, RenderInfo.mScale);
         return ModelMatrix;
     }
@@ -871,9 +871,9 @@ namespace application::play
                 btScalar yaw, pitch, roll;
                 rot.getEulerZYX(roll, pitch, yaw);
 
-                RenderInfo.mRotate.x = glm::degrees(yaw);
-                RenderInfo.mRotate.y = glm::degrees(pitch);
-                RenderInfo.mRotate.z = glm::degrees(roll);
+                RenderInfo.mRotate.x = yaw;
+                RenderInfo.mRotate.y = pitch;
+                RenderInfo.mRotate.z = roll;
 
                 RenderInfo.mTranslate.x = pos.x();
                 RenderInfo.mTranslate.y = pos.y();
@@ -886,9 +886,9 @@ namespace application::play
 
             InstanceMatrices[OutputIndex] = glm::translate(InstanceMatrices[OutputIndex], RenderInfo.mTranslate);
 
-            InstanceMatrices[OutputIndex] = glm::rotate(InstanceMatrices[OutputIndex], glm::radians(RenderInfo.mRotate.z), glm::vec3(0.0, 0.0f, 1.0));
-            InstanceMatrices[OutputIndex] = glm::rotate(InstanceMatrices[OutputIndex], glm::radians(RenderInfo.mRotate.y), glm::vec3(0.0f, 1.0, 0.0));
-            InstanceMatrices[OutputIndex] = glm::rotate(InstanceMatrices[OutputIndex], glm::radians(RenderInfo.mRotate.x), glm::vec3(1.0, 0.0f, 0.0));
+            InstanceMatrices[OutputIndex] = glm::rotate(InstanceMatrices[OutputIndex], RenderInfo.mRotate.z, glm::vec3(0.0, 0.0f, 1.0));
+            InstanceMatrices[OutputIndex] = glm::rotate(InstanceMatrices[OutputIndex], RenderInfo.mRotate.y, glm::vec3(0.0f, 1.0, 0.0));
+            InstanceMatrices[OutputIndex] = glm::rotate(InstanceMatrices[OutputIndex], RenderInfo.mRotate.x, glm::vec3(1.0, 0.0f, 0.0));
 
             InstanceMatrices[OutputIndex] = glm::scale(InstanceMatrices[OutputIndex], RenderInfo.mScale);
             PatternFrames[OutputIndex] = RenderInfo.mEntity->mTexturePatternFrame;

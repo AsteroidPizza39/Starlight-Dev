@@ -19,6 +19,23 @@
 
 namespace application::game
 {
+	void BancEntity::NotifyRotateEditedByUser()
+	{
+		mRotateUserEdited = true;
+	}
+
+	void BancEntity::SyncRotateInspectorEulerFromRadians()
+	{
+		mRotateInspectorEulerDeg = glm::degrees(mRotate);
+	}
+
+	void BancEntity::InitializeRotationPersistenceFromCurrent()
+	{
+		mRotateSerializedRadiansSnap = mRotate;
+		mRotateUserEdited = false;
+		SyncRotateInspectorEulerFromRadians();
+	}
+
 	namespace
 	{
 		std::string ToLowerCopy(const std::string& Value)
@@ -674,26 +691,6 @@ namespace application::game
 			return nullptr;
 		}
 
-		std::string BuildBoneDebugPreview(application::file::game::bfres::BfresFile::Model& Model, size_t Limit = 20)
-		{
-			std::string Preview;
-			size_t Count = 0;
-			for (auto& [BoneName, BoneNode] : Model.ModelSkeleton.Bones.mNodes)
-			{
-				if (!Preview.empty())
-				{
-					Preview += ", ";
-				}
-				Preview += BoneName;
-				Count++;
-				if (Count >= Limit)
-				{
-					break;
-				}
-			}
-			return Preview;
-		}
-
 		glm::mat4 BuildAttachmentCorrectionMatrix(application::file::game::bfres::BfresFile::Model& EquipmentModel, const std::string& SourceBoneName)
 		{
 			uint32_t BakedBoneIndex = 0;
@@ -1130,22 +1127,12 @@ namespace application::game
 			const uint32_t TextureValueCount = static_cast<uint32_t>((PackedCountsC >> 32) & 0xFFFFFFFF);
 			if (MaterialCount == 0 || TextureValueCount == 0)
 			{
-				application::util::Logger::Warning("TexturePatternDebug", "FMAB parse failed for %s/%s: materialCount=%u textureValueCount=%u", ModelProjectName.c_str(), AnimationName.c_str(), MaterialCount, TextureValueCount);
 				return std::nullopt;
 			}
-
-			application::util::Logger::Info("TexturePatternDebug", "FMAB opened %s (anim=%s, fmab=%s, materials=%u, patterns=%u, values=%u)",
-				AnimPath.c_str(),
-				SafeReadString(MatAnimNameOffset).c_str(),
-				AnimationName.c_str(),
-				MaterialCount,
-				TexturePatternCount,
-				TextureValueCount);
 
 			const std::vector<uint64_t> TextureValueOffsets = ReadArrayQWords(TextureValueTableOffset, TextureValueCount);
 			if (TextureValueOffsets.empty())
 			{
-				application::util::Logger::Warning("TexturePatternDebug", "FMAB parse failed for %s/%s: no texture value offsets", ModelProjectName.c_str(), AnimationName.c_str());
 				return std::nullopt;
 			}
 
@@ -1469,10 +1456,6 @@ namespace application::game
 				}
 			}
 
-			if (OverridesByMaterial.empty())
-			{
-				application::util::Logger::Warning("TexturePatternDebug", "FMAB parsed but produced no albedo overrides for %s/%s frame=%d", ModelProjectName.c_str(), AnimationName.c_str(), Frame);
-			}
 			return OverridesByMaterial.empty() ? std::nullopt : std::optional<std::unordered_map<std::string, std::string>>(std::move(OverridesByMaterial));
 		}
 
@@ -1687,7 +1670,7 @@ namespace application::game
 		if (Node.HasChild("SRTHash")) mSRTHash = Node.GetChild("SRTHash")->GetValue<uint32_t>();
 
 		if (Node.HasChild("Translate")) mTranslate = Node.GetChild("Translate")->GetValue<glm::vec3>();
-		if (Node.HasChild("Rotate")) mRotate = application::util::Math::RadiansToDegrees(Node.GetChild("Rotate")->GetValue<glm::vec3>());
+		if (Node.HasChild("Rotate")) mRotate = Node.GetChild("Rotate")->GetValue<glm::vec3>();
 		if (Node.HasChild("Scale")) mScale = Node.GetChild("Scale")->GetValue<glm::vec3>();
 
 		if (Node.HasChild("Bakeable")) mBakeable = Node.GetChild("Bakeable")->GetValue<bool>();
@@ -1922,6 +1905,7 @@ namespace application::game
 			mMergedActorChildren = application::manager::MergedActorMgr::GetMergedActor(std::get<std::string>(mDynamic["BancPath"]));
 		}
 
+		InitializeRotationPersistenceFromCurrent();
 		return GenerateBancEntityInfo();
 	}
 
@@ -1932,12 +1916,15 @@ namespace application::game
 
 		mGyml = Gyml;
 		 
+		InitializeRotationPersistenceFromCurrent();
 		return GenerateBancEntityInfo();
 	}
 
 	bool BancEntity::GenerateBancEntityInfo()
 	{
+		application::util::Logger::Info("LoadDebug", "GenerateBancEntityInfo begin Gyml=%s", mGyml.c_str());
 		mActorPack = application::manager::ActorPackMgr::GetActorPack(mGyml);
+		application::util::Logger::Info("LoadDebug", "GenerateBancEntityInfo ActorPack=%p Gyml=%s", static_cast<const void*>(mActorPack), mGyml.c_str());
 		mHornBfresRenderer = nullptr;
 		mHornAttachmentMatrix = glm::mat4(1.0f);
 		mHornModelCorrectionMatrix = glm::mat4(1.0f);
@@ -1963,8 +1950,12 @@ namespace application::game
 				if (ModelInfoComponent->mModelProjectName.has_value() && ModelInfoComponent->mFmdbName.has_value() && !ModelInfoComponent->mModelProjectName.value().empty() && !ModelInfoComponent->mFmdbName.value().empty())
 				{
 					mTexturePatternModelProjectName = ModelInfoComponent->mModelProjectName.value();
-					application::file::game::bfres::BfresFile* File = application::manager::BfresFileMgr::GetBfresFile(application::util::FileUtil::GetBfresFilePath(ModelInfoComponent->mModelProjectName.value() + "." + ModelInfoComponent->mFmdbName.value() + ".bfres"));
+					const std::string ModelBfresPath = application::util::FileUtil::GetBfresFilePath(ModelInfoComponent->mModelProjectName.value() + "." + ModelInfoComponent->mFmdbName.value() + ".bfres");
+					application::util::Logger::Info("LoadDebug", "GenerateBancEntityInfo Gyml=%s ResolvingMainBfres=%s", mGyml.c_str(), ModelBfresPath.c_str());
+					application::file::game::bfres::BfresFile* File = application::manager::BfresFileMgr::GetBfresFile(ModelBfresPath);
+					application::util::Logger::Info("LoadDebug", "GenerateBancEntityInfo Gyml=%s BfresFile=%p", mGyml.c_str(), static_cast<const void*>(File));
 					mBfresRenderer = application::manager::BfresRendererMgr::GetRenderer(File);
+					application::util::Logger::Info("LoadDebug", "GenerateBancEntityInfo Gyml=%s BfresRenderer=%p", mGyml.c_str(), static_cast<const void*>(mBfresRenderer));
 					HasResolvedMainModel = mBfresRenderer != nullptr && !mBfresRenderer->mBfresFile->mDefaultModel;
 				}
 
@@ -1975,10 +1966,14 @@ namespace application::game
 					mTexturePatternAnimationName = std::filesystem::path(ModelInfoComponent->mModelVariationFmabName.value()).stem().string();
 					mTexturePatternFrame = std::max(0, static_cast<int32_t>(std::lround(ModelInfoComponent->mModelVariationFmabFrame.value())));
 					mTexturePatternOverrideKey = mTexturePatternModelProjectName + "|" + mTexturePatternAnimationName + "|" + std::to_string(mTexturePatternFrame);
+					application::util::Logger::Info("LoadDebug", "GenerateBancEntityInfo Gyml=%s ResolvingTexturePattern Project=%s Anim=%s Frame=%d",
+						mGyml.c_str(), mTexturePatternModelProjectName.c_str(), mTexturePatternAnimationName.c_str(), mTexturePatternFrame);
 					if (std::optional<std::unordered_map<std::string, std::string>> Overrides = ResolveTexturePatternAlbedoOverrides(mTexturePatternModelProjectName, mTexturePatternAnimationName, mTexturePatternFrame); Overrides.has_value())
 					{
 						mTexturePatternAlbedoOverridesByMaterial = std::move(Overrides.value());
 					}
+					application::util::Logger::Info("LoadDebug", "GenerateBancEntityInfo Gyml=%s TexturePatternResolved Overrides=%u",
+						mGyml.c_str(), static_cast<uint32_t>(mTexturePatternAlbedoOverridesByMaterial.size()));
 
 				}
 			}
@@ -1986,6 +1981,7 @@ namespace application::game
 
 		if (mBfresRenderer == nullptr)
 		{
+			application::util::Logger::Info("LoadDebug", "GenerateBancEntityInfo Gyml=%s ResolvingFallbackBfresByGymlSubstring", mGyml.c_str());
 			application::file::game::bfres::BfresFile* File = &application::manager::BfresFileMgr::gBfresFiles["Default"];
 			for (auto& [Key, Val] : application::manager::BfresFileMgr::gBfresFiles)
 			{
@@ -1997,17 +1993,22 @@ namespace application::game
 			}
 
 			mBfresRenderer = application::manager::BfresRendererMgr::GetRenderer(File);
+			application::util::Logger::Info("LoadDebug", "GenerateBancEntityInfo Gyml=%s FallbackBfresRenderer=%p", mGyml.c_str(), static_cast<const void*>(mBfresRenderer));
 		}
 
 		if (mBfresRenderer == nullptr)
 		{
+			application::util::Logger::Warning("LoadDebug", "GenerateBancEntityInfo Gyml=%s aborted: mBfresRenderer is null", mGyml.c_str());
 			return false;
 		}
 
 		if (HasResolvedMainModel)
 		{
+			application::util::Logger::Info("LoadDebug", "GenerateBancEntityInfo Gyml=%s ResolvingHorn", mGyml.c_str());
 			std::optional<std::string> HornModelPath = ResolveHornModelPath(*mActorPack, FindHornTypeToken(*this), mGyml);
 			mHornBfresRenderer = ResolveHornRenderer(HornModelPath);
+			application::util::Logger::Info("LoadDebug", "GenerateBancEntityInfo Gyml=%s HornRenderer=%p HornPath=%s",
+				mGyml.c_str(), static_cast<const void*>(mHornBfresRenderer), HornModelPath.value_or(std::string("<none>")).c_str());
 
 			if (mHornBfresRenderer != nullptr)
 			{
@@ -2117,10 +2118,6 @@ namespace application::game
 
 				if (EquipmentUserParamPath.has_value())
 				{
-					application::util::Logger::Info("EquipmentDebug", "Owner=%s EquipmentUserParamPath=%s PackMatched=%s",
-						mGyml.c_str(),
-						EquipmentUserParamPath->c_str(),
-						PackMatchedEquipmentUserParamPath.has_value() ? PackMatchedEquipmentUserParamPath->c_str() : "<none>");
 					std::vector<application::file::game::byml::BymlFile> EquipmentUserChain = ResolveBymlInheritanceChain(*mActorPack, EquipmentUserParamPath.value());
 					if (!EquipmentUserChain.empty())
 					{
@@ -2156,10 +2153,6 @@ namespace application::game
 				SlotValues["EquipmentUser_Head"] = SlotValues["EquipmentUser_Helmet"];
 			}
 
-			application::util::Logger::Info("EquipmentDebug", "Owner=%s Equipment bones Weapon=%s Shield=%s Bow=%s ScaleRatios Bow=%g Shield=%g SmallSword=%g LargeSword=%g Spear=%g",
-				mGyml.c_str(), WeaponBoneName.c_str(), ShieldBoneName.c_str(), BowBoneName.c_str(),
-				BowScaleRatio, ShieldScaleRatio, SmallSwordScaleRatio, LargeSwordScaleRatio, SpearScaleRatio);
-
 			struct SlotConfig
 			{
 				std::string mSlotKey;
@@ -2176,6 +2169,8 @@ namespace application::game
 				SlotConfig{"EquipmentUser_Lower", "Root", "Root"}
 			};
 
+			application::util::Logger::Info("LoadDebug", "GenerateBancEntityInfo Gyml=%s ResolvingEquipment SlotCount=%u",
+				mGyml.c_str(), static_cast<uint32_t>(SlotValues.size()));
 			application::file::game::bfres::BfresFile::Model& MainModel = mBfresRenderer->mBfresFile->Models.GetByIndex(0).mValue;
 			for (const SlotConfig& Slot : SlotConfigs)
 			{
@@ -2190,13 +2185,11 @@ namespace application::game
 					continue;
 				}
 
+				application::util::Logger::Info("LoadDebug", "GenerateBancEntityInfo Owner=%s ResolvingEquipmentSlot Key=%s Gyml=%s",
+					mGyml.c_str(), Slot.mSlotKey.c_str(), Gyml.c_str());
 				application::gl::BfresRenderer* Renderer = ResolveRendererFromActorGyml(Gyml);
 				if (Renderer == nullptr || Renderer->mBfresFile->mDefaultModel)
 				{
-					if (Slot.mSlotKey == "EquipmentUser_Weapon")
-					{
-						application::util::Logger::Warning("EquipmentDebug", "Failed to resolve renderer for %s slot actor=%s targetBone=%s owner=%s", Slot.mSlotKey.c_str(), Gyml.c_str(), Slot.mTargetBoneName.c_str(), mGyml.c_str());
-					}
 					continue;
 				}
 
@@ -2204,12 +2197,8 @@ namespace application::game
 				application::file::game::bfres::BfresFile::Skeleton::Bone* TargetBone = FindBoneByName(MainModel, Slot.mTargetBoneName, &ResolvedTargetBoneName);
 				if (TargetBone == nullptr)
 				{
-					application::util::Logger::Warning("EquipmentDebug", "Failed target bone for slot=%s actor=%s requestedBone=%s owner=%s preview=[%s]",
-						Slot.mSlotKey.c_str(), Gyml.c_str(), Slot.mTargetBoneName.c_str(), mGyml.c_str(), BuildBoneDebugPreview(MainModel).c_str());
 					continue;
 				}
-				application::util::Logger::Info("EquipmentDebug", "Resolved target bone for slot=%s actor=%s requestedBone=%s matchedBone=%s owner=%s",
-					Slot.mSlotKey.c_str(), Gyml.c_str(), Slot.mTargetBoneName.c_str(), ResolvedTargetBoneName.c_str(), mGyml.c_str());
 
 				application::file::game::bfres::BfresFile::Model& EquipmentModel = Renderer->mBfresFile->Models.GetByIndex(0).mValue;
 				float ScaleRatio = 1.0f;
@@ -2253,6 +2242,8 @@ namespace application::game
 			}
 		}
 
+		application::util::Logger::Info("LoadDebug", "GenerateBancEntityInfo end Gyml=%s Equipment=%u Horn=%d",
+			mGyml.c_str(), static_cast<uint32_t>(mEquipmentAttachments.size()), mHasHornAttachment ? 1 : 0);
 		return true;
 	}
 
@@ -2544,7 +2535,7 @@ namespace application::game
 			Node.AddChild(RailsNode);
 		}
 
-		GenerateBymlVectorNode(Node, "Rotate", glm::radians(mRotate), glm::vec3(0.0f, 0.0f, 0.0f), false);
+		GenerateBymlVectorNode(Node, "Rotate", mRotateUserEdited ? mRotate : mRotateSerializedRadiansSnap, glm::vec3(0.0f, 0.0f, 0.0f), false);
 		Node.AddChild(GenerateBymlNode(application::file::game::byml::BymlFile::Type::UInt32, "SRTHash", mSRTHash));
 		GenerateBymlVectorNode(Node, "Scale", mScale, glm::vec3(1.0f, 1.0f, 1.0f), false);
 		GenerateBymlVectorNode(Node, "Translate", mTranslate, glm::vec3(0.0f, 0.0f, 0.0f), false);

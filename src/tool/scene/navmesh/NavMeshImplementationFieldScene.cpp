@@ -391,9 +391,9 @@ namespace application::tool::scene::navmesh
 
 						GLMModel = glm::translate(GLMModel, RenderInfo->mTranslate);
 
-						GLMModel = glm::rotate(GLMModel, glm::radians(RenderInfo->mRotate.z), glm::vec3(0.0, 0.0f, 1.0));
-						GLMModel = glm::rotate(GLMModel, glm::radians(RenderInfo->mRotate.y), glm::vec3(0.0f, 1.0, 0.0));
-						GLMModel = glm::rotate(GLMModel, glm::radians(RenderInfo->mRotate.x), glm::vec3(1.0, 0.0f, 0.0));
+						GLMModel = glm::rotate(GLMModel, RenderInfo->mRotate.z, glm::vec3(0.0, 0.0f, 1.0));
+						GLMModel = glm::rotate(GLMModel, RenderInfo->mRotate.y, glm::vec3(0.0f, 1.0, 0.0));
+						GLMModel = glm::rotate(GLMModel, RenderInfo->mRotate.x, glm::vec3(1.0, 0.0f, 0.0));
 
 						GLMModel = glm::scale(GLMModel, RenderInfo->mScale);
 
@@ -466,9 +466,9 @@ namespace application::tool::scene::navmesh
 
 						GLMModel = glm::translate(GLMModel, RenderInfo->mTranslate);
 
-						GLMModel = glm::rotate(GLMModel, glm::radians(RenderInfo->mRotate.z), glm::vec3(0.0, 0.0f, 1.0));
-						GLMModel = glm::rotate(GLMModel, glm::radians(RenderInfo->mRotate.y), glm::vec3(0.0f, 1.0, 0.0));
-						GLMModel = glm::rotate(GLMModel, glm::radians(RenderInfo->mRotate.x), glm::vec3(1.0, 0.0f, 0.0));
+						GLMModel = glm::rotate(GLMModel, RenderInfo->mRotate.z, glm::vec3(0.0, 0.0f, 1.0));
+						GLMModel = glm::rotate(GLMModel, RenderInfo->mRotate.y, glm::vec3(0.0f, 1.0, 0.0));
+						GLMModel = glm::rotate(GLMModel, RenderInfo->mRotate.x, glm::vec3(1.0, 0.0f, 0.0));
 
 						GLMModel = glm::scale(GLMModel, RenderInfo->mScale);
 

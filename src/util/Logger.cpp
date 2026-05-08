@@ -15,6 +15,7 @@ namespace application::util
 		va_end(args);
 
 		std::cout << "[" << Sys << "] Error: " << gBuffer << "!\n";
+		std::cout.flush();
 	}
 
 	void Logger::Warning(const std::string& Sys, const std::string& Fmt, ...)
@@ -26,6 +27,7 @@ namespace application::util
 		va_end(args);
 
 		std::cout << "[" << Sys << "] Warning: " << gBuffer << ".\n";
+		std::cout.flush();
 	}
 
 	void Logger::Info(const std::string& Sys, const std::string& Fmt, ...)
@@ -37,5 +39,6 @@ namespace application::util
 		va_end(args);
 
 		std::cout << "[" << Sys << "] " << gBuffer << ".\n";
+		std::cout.flush();
 	}
 }

@@ -160,9 +160,8 @@ namespace application
         application::file::tool::AdditionalAINBNodes::Load(application::util::FileUtil::GetWorkingDirFilePath("Nodes.ainode.byml"));
 
         application::manager::ProjectMgr::Initialize();
-        application::file::tool::ProjectConfigFile::Load(application::util::FileUtil::GetWorkingDirFilePath("Project.eprojcfg"));
-
         application::file::tool::PathConfigFile::Load(application::util::FileUtil::GetWorkingDirFilePath("Config.epathcfg"));
+        application::file::tool::ProjectConfigFile::Load(application::util::FileUtil::GetWorkingDirFilePath("Project.eprojcfg"));
         application::file::tool::GitIdentityFile::Load(application::util::FileUtil::GetWorkingDirFilePath("Identity.egit"));
         application::file::tool::LicenseFile::gNoLicenseFileFound = !application::util::FileUtil::FileExists(application::util::FileUtil::GetWorkingDirFilePath("License.elicense"));
 
