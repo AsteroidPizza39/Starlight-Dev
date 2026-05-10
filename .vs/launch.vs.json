@@ -7,6 +7,12 @@
       "projectTarget": "",
       "name": "Starlight",
       "currentDir": "${workspaceRoot}/rootDir"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "Starlight.exe (src\\Starlight.exe)",
+      "name": "Starlight.exe (src\\Starlight.exe)"
     }
   ]
 }
