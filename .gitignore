@@ -44,7 +44,6 @@
 .vs/*
 !.vs/launch.vs.json
 
-rootDir/
 
 build/
 Build/
