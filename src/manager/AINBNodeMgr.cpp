@@ -957,7 +957,10 @@ namespace application::manager
 
                 Def.mNameHash = Reader.ReadUInt32();
             }
+
+            return true;
         }
+
         return false;
     }
 }

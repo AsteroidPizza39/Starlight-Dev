@@ -1,0 +1,48 @@
+# Configure MSVC + CMake (preset x64-release), then CPack: ZIP (portable) + NSIS (installer).
+
+name: Windows packages
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: windows-packages-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # CPack NSIS generator needs makensis on PATH (or in the default NSIS folder).
+      - name: Install NSIS
+        run: choco install nsis --no-progress -y
+
+      - name: Build portable (ZIP) and installer (NSIS)
+        shell: cmd
+        run: build-and-package.bat
+
+      - name: Upload portable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: Starlight-portable
+          path: out/build/x64-release/*.zip
+          if-no-files-found: error
+
+      - name: Upload NSIS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Starlight-installer
+          # CPack NSIS writes ${CPACK_PACKAGE_NAME}-<version>-<system>.exe at the preset build root (not src/).
+          path: out/build/x64-release/Starlight*.exe
+          if-no-files-found: error

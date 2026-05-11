@@ -75,5 +75,31 @@
         "CMAKE_BUILD_TYPE": "Release"
       }
     }
+  ],
+  "buildPresets": [
+    {
+      "name": "x64-debug",
+      "configurePreset": "x64-debug"
+    },
+    {
+      "name": "x64-release",
+      "configurePreset": "x64-release"
+    },
+    {
+      "name": "x64-release-dbg-info",
+      "configurePreset": "x64-release-dbg-info"
+    },
+    {
+      "name": "x64-debug-fast",
+      "configurePreset": "x64-debug-fast"
+    },
+    {
+      "name": "x86-debug",
+      "configurePreset": "x86-debug"
+    },
+    {
+      "name": "x86-release",
+      "configurePreset": "x86-release"
+    }
   ]
 }

@@ -27,6 +27,12 @@
 #include <util/fa-solid-900.h>
 #include <util/ImGuiNotify.h>
 
+#if defined(_WIN32)
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+#include <windows.h>
+#endif
+
 #define TOOL_IMGUI_VIEWPORTS_ENABLED 0
 #define TOOL_GL_DEBUG 0
 
@@ -186,6 +192,41 @@ namespace application::manager
             application::util::Logger::Error("UIMgr", "Could not create window");
             return false;
         }
+
+#if defined(_WIN32)
+        {
+            HWND hwnd = glfwGetWin32Window(gWindow);
+            HINSTANCE instance = GetModuleHandleW(nullptr);
+            HICON iconLarge = static_cast<HICON>(LoadImageW(
+                instance,
+                L"IDI_MAIN_ICON",
+                IMAGE_ICON,
+                GetSystemMetrics(SM_CXICON),
+                GetSystemMetrics(SM_CYICON),
+                LR_DEFAULTCOLOR
+            ));
+            HICON iconSmall = static_cast<HICON>(LoadImageW(
+                instance,
+                L"IDI_MAIN_ICON",
+                IMAGE_ICON,
+                GetSystemMetrics(SM_CXSMICON),
+                GetSystemMetrics(SM_CYSMICON),
+                LR_DEFAULTCOLOR
+            ));
+
+            if (hwnd != nullptr)
+            {
+                if (iconLarge != nullptr)
+                    SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(iconLarge));
+                if (iconSmall != nullptr)
+                    SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(iconSmall));
+            }
+
+            if (iconLarge == nullptr && iconSmall == nullptr)
+                application::util::Logger::Warning("UIMgr", "Failed to load embedded window icon IDI_MAIN_ICON");
+        }
+#endif
+
         glfwMakeContextCurrent(gWindow);
 
         gladLoadGL();
@@ -662,7 +703,9 @@ namespace application::manager
             ImGui::PopStyleColor();
 
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 0.0f, 1.0f));
-            ImGui::Text("PUBLIC BUILD: %s", STARLIGHT_GIT_COMMIT);
+            ImGui::Text("Version: %s", STARLIGHT_APP_VERSION);
+            ImGui::SameLine();
+            ImGui::Text("| Build: %s", STARLIGHT_GIT_COMMIT);
             ImGui::PopStyleColor();
 
             ImGui::EndMainMenuBar();

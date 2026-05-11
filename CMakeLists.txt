@@ -34,6 +34,10 @@ message(STATUS "Git commit: ${STARLIGHT_GIT_COMMIT}")
 
 add_compile_definitions(STARLIGHT_GIT_COMMIT="${STARLIGHT_GIT_COMMIT}")
 
+set(STARLIGHT_APP_VERSION "2.0.2" CACHE STRING "Human-readable Starlight app version")
+message(STATUS "App version: ${STARLIGHT_APP_VERSION}")
+add_compile_definitions(STARLIGHT_APP_VERSION="${STARLIGHT_APP_VERSION}")
+
 if(APPLE)
     if(NOT CMAKE_OSX_ARCHITECTURES)
         execute_process(
@@ -225,7 +229,7 @@ set(MESHCODEC_PATCH_STAMP "${CMAKE_SOURCE_DIR}/libs/meshcodec/.patched")
 if(NOT EXISTS "${MESHCODEC_PATCH_STAMP}")
     message(STATUS "Patching meshcodec sources...")
 
-    find_program(PYTHON_EXECUTABLE python3 REQUIRED)
+    find_program(PYTHON_EXECUTABLE NAMES py python3 python REQUIRED)
     set(MESHCODEC_PATCH_SCRIPT [=[
 import glob
 import re
@@ -266,14 +270,43 @@ files += glob.glob(r"${CMAKE_SOURCE_DIR}/libs/meshcodec/src/**/*.h", recursive=T
 for p in files:
     patch_file(p)
 ]=])
+    set(MESHCODEC_PATCH_FILE "${CMAKE_BINARY_DIR}/meshcodec_patch.py")
+    file(WRITE "${MESHCODEC_PATCH_FILE}" "${MESHCODEC_PATCH_SCRIPT}")
+    set(PYTHON_EXECUTABLE_FOR_PATCH "${PYTHON_EXECUTABLE}")
+    get_filename_component(PYTHON_EXECUTABLE_NAME "${PYTHON_EXECUTABLE}" NAME_WE)
+    if(PYTHON_EXECUTABLE_NAME STREQUAL "py")
+        execute_process(
+            COMMAND "${PYTHON_EXECUTABLE}" -3 -c "import sys; print(sys.executable)"
+            RESULT_VARIABLE PY_RESOLVE_RESULT
+            OUTPUT_VARIABLE PY_RESOLVE_OUTPUT
+            ERROR_VARIABLE PY_RESOLVE_ERROR
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+
+        if(PY_RESOLVE_RESULT EQUAL 0 AND NOT PY_RESOLVE_OUTPUT STREQUAL "")
+            set(PYTHON_EXECUTABLE_FOR_PATCH "${PY_RESOLVE_OUTPUT}")
+        else()
+            find_program(PYTHON_FALLBACK_EXECUTABLE NAMES python3 python)
+            if(PYTHON_FALLBACK_EXECUTABLE)
+                set(PYTHON_EXECUTABLE_FOR_PATCH "${PYTHON_FALLBACK_EXECUTABLE}")
+                message(WARNING "py launcher is unavailable in this shell, falling back to: ${PYTHON_EXECUTABLE_FOR_PATCH}")
+            else()
+                message(FATAL_ERROR "Failed to resolve Python interpreter via py launcher and no python/python3 fallback was found.\nstdout:\n${PY_RESOLVE_OUTPUT}\nstderr:\n${PY_RESOLVE_ERROR}")
+            endif()
+        endif()
+    endif()
+
+    message(STATUS "Using Python interpreter for meshcodec patch: ${PYTHON_EXECUTABLE_FOR_PATCH}")
     execute_process(
-        COMMAND ${PYTHON_EXECUTABLE} -c "${MESHCODEC_PATCH_SCRIPT}"
+        COMMAND "${PYTHON_EXECUTABLE_FOR_PATCH}" "${MESHCODEC_PATCH_FILE}"
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         RESULT_VARIABLE PATCH_RESULT
+        OUTPUT_VARIABLE PATCH_OUTPUT
+        ERROR_VARIABLE PATCH_ERROR
     )
 
     if(NOT PATCH_RESULT EQUAL 0)
-        message(FATAL_ERROR "meshcodec patching failed")
+        message(FATAL_ERROR "meshcodec patching failed\nstdout:\n${PATCH_OUTPUT}\nstderr:\n${PATCH_ERROR}")
     endif()
 
     # Write stamp so we never patch again unless libs/meshcodec is re-cloned
@@ -308,6 +341,17 @@ add_subdirectory( libs/bullet3 )
 set(ASTCENC_SHAREDLIB ON CACHE BOOL "Enable astcenc builds with core library shared objects")
 set(ASTCENC_CLI OFF CACHE BOOL "Enable build of astcenc command line tools")
 add_subdirectory( libs/astcenc )
+
+# Newer astcencoder adds `parent_context` to astcenc_context_alloc; detect from header text.
+# (CMake regex MATCH was unreliable across header formatting; substring find is deterministic.)
+file(READ "${CMAKE_SOURCE_DIR}/libs/astcenc/Source/astcenc.h" STARLIGHT_ASTCENC_HEADER_SNIP)
+string(FIND "${STARLIGHT_ASTCENC_HEADER_SNIP}" "parent_context" _astar_parent_ix)
+if(NOT _astar_parent_ix EQUAL -1)
+	set(STARLIGHT_ASTC_CONTEXT_ALLOC_HAS_PARENT TRUE)
+else()
+	set(STARLIGHT_ASTC_CONTEXT_ALLOC_HAS_PARENT FALSE)
+endif()
+message(STATUS "astcenc_context_alloc(..., parent): ${STARLIGHT_ASTC_CONTEXT_ALLOC_HAS_PARENT}")
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build libgit2 static" FORCE)
 set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -511,3 +555,36 @@ if(TOOL_REMOVE_PRIVATE_FEATURES)
 endif()
 
 add_subdirectory ("src")
+
+option(STARLIGHT_ENABLE_PACKAGING "Enable CPack package generation" ON)
+if(STARLIGHT_ENABLE_PACKAGING)
+    set(CPACK_PACKAGE_NAME "Starlight")
+    set(CPACK_PACKAGE_VENDOR "Starlight Team")
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Toolkit for The Legend of Zelda: Tears of the Kingdom modding")
+    set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/MrMystery846/Starlight")
+    set(CPACK_PACKAGE_CONTACT "Starlight")
+    set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE.txt")
+    set(CPACK_PACKAGE_INSTALL_DIRECTORY "Starlight")
+
+    if(DEFINED STARLIGHT_APP_VERSION AND NOT STARLIGHT_APP_VERSION STREQUAL "")
+        set(CPACK_PACKAGE_VERSION "${STARLIGHT_APP_VERSION}")
+    else()
+        set(CPACK_PACKAGE_VERSION "0.0.0")
+    endif()
+
+    if(WIN32)
+        # Build both a portable zip and an NSIS installer on Windows.
+        set(CPACK_GENERATOR "ZIP;NSIS")
+        set(CPACK_COMPONENTS_ALL Runtime)
+        set(CPACK_NSIS_MUI_ICON "${CMAKE_SOURCE_DIR}/rootDir/Assets/AppIcon/StarlightIcon.ico")
+        set(CPACK_NSIS_MUI_UNIICON "${CMAKE_SOURCE_DIR}/rootDir/Assets/AppIcon/StarlightIcon.ico")
+        set(CPACK_NSIS_DISPLAY_NAME "Starlight")
+        set(CPACK_NSIS_PACKAGE_NAME "Starlight")
+        set(CPACK_NSIS_INSTALL_ROOT "$LOCALAPPDATA")
+        set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+    else()
+        set(CPACK_GENERATOR "TGZ")
+    endif()
+
+    include(CPack)
+endif()
