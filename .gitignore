@@ -44,14 +44,7 @@
 .vs/*
 !.vs/launch.vs.json
 
-rootDir/WorkingDir/Cache
-!rootDir/WorkingDir/Cache/.gitkeep
-rootDir/WorkingDir/Projects
-!rootDir/WorkingDir/Projects/.gitkeep
-rootDir/WorkingDir
-!rootDir/WorkingDir/Cache
-!rootDir/WorkingDir/Projects
-!rootDir/WorkingDir/Definitions.eainbdef
+rootDir/
 
 build/
 Build/
