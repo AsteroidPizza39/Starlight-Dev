@@ -493,7 +493,11 @@ namespace application::file::game::phive::starlight_physics::shape
                 for (int ci = 0; ci < 4; ++ci)
                     if (dst.IsChildValid(ci))
                         dst.mData[ci].mParent = (uint8_t)newIdx[dst.mData[ci].mParent];
-                dst.ConfigureAsLeafOrInternal(false);
+                if (!dst.ConfigureAsLeafOrInternal(false))
+                {
+                    application::util::Logger::Error("hknpMeshShapeBuilder",
+                        "Failed to configure compacted internal BVH node");
+                }
             }
         }
         nodes.resize(out);
@@ -667,8 +671,17 @@ namespace application::file::game::phive::starlight_physics::shape
 
             // Pass 3: compact BVH node children and remove dead nodes
             for (int ni = 0; ni < (int)chunk.mLocalBvh.size(); ++ni)
-                if (!chunk.mLocalBvh[ni].IsEmpty())
-                    chunk.mLocalBvh[ni].CompactChildren(wasLeaf[ni]);
+            {
+                if (chunk.mLocalBvh[ni].IsEmpty())
+                    continue;
+
+                if (!chunk.mLocalBvh[ni].CompactChildren(wasLeaf[ni]))
+                {
+                    application::util::Logger::Error("hknpMeshShapeBuilder",
+                        "Failed to compact BVH children after quantization repair");
+                    return true;
+                }
+            }
 
             if (!deadBvhNodes.empty())
                 compactLocalBvh(deadBvhNodes, chunk);
@@ -1362,6 +1375,14 @@ namespace application::file::game::phive::starlight_physics::shape
         int degCount = 0;
 
         buildIntermediateData(geo, packer, bvh, chunks, matTable, degCount);
+
+        if (chunks.empty())
+        {
+            application::util::Logger::Error("hknpMeshShapeBuilder::compile",
+                "Collision mesh generation produced no geometry sections");
+            return false;
+        }
+
         finalizeShape(packer, bvh, chunks, matTable, true, 0, 0, (int)geo.mTriangles.size(), *dst);
 
         const int numSections = (int)dst->mGeometrySections.mElements.size();
@@ -1376,6 +1397,7 @@ namespace application::file::game::phive::starlight_physics::shape
             application::util::Logger::Warning("hknpMeshShapeBuilder::compile",
                 "Building hknpMeshShape with no geometry. Geometry may be empty or fully degenerate.");
             dst->mParent.mParent.mNumShapeKeyBits.mParent = 0;
+            return false;
         }
         return true;
     }

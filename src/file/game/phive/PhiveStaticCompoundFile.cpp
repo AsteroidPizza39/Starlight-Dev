@@ -9,6 +9,54 @@
 
 namespace application::file::game::phive
 {
+	std::vector<unsigned char> PhiveStaticCompoundFile::BuildEmbeddedBphshBytes(
+		application::file::game::phive::shape::PhiveShape& Shape,
+		const std::vector<uint64_t>& Reserve0,
+		const std::vector<uint8_t>& Reserve1)
+	{
+		std::vector<unsigned char> Bytes = Shape.ToBinary();
+		application::util::BinaryVectorWriter Writer;
+
+		Writer.WriteRawUnsafeFixed(reinterpret_cast<const char*>(Bytes.data()), Bytes.size());
+		while (Writer.GetPosition() % 16 != 0)
+		{
+			Writer.WriteByte(0);
+		}
+
+		if (!Reserve0.empty())
+		{
+			Writer.WriteRawUnsafeFixed(
+				reinterpret_cast<const char*>(Reserve0.data()),
+				Reserve0.size() * sizeof(uint64_t));
+		}
+
+		while (Writer.GetPosition() % 16 != 0)
+		{
+			Writer.WriteByte(0);
+		}
+
+		if (!Reserve1.empty())
+		{
+			Writer.WriteRawUnsafeFixed(
+				reinterpret_cast<const char*>(Reserve1.data()),
+				Reserve1.size());
+		}
+
+		while (Writer.GetPosition() % 16 != 0)
+		{
+			Writer.WriteByte(0);
+		}
+
+		std::vector<unsigned char> Result = Writer.GetData();
+		if (Result.size() >= sizeof(application::file::game::phive::shape::PhiveShape::PhiveShapeHeader))
+		{
+			auto& Header = *reinterpret_cast<application::file::game::phive::shape::PhiveShape::PhiveShapeHeader*>(Result.data());
+			Header.mFileSize = static_cast<uint32_t>(Result.size());
+		}
+
+		return Result;
+	}
+
 	PhiveStaticCompoundFile::PhiveStaticCompoundFile(std::vector<unsigned char> Bytes)
 	{
 		application::util::BinaryVectorReader Reader(Bytes);
@@ -348,7 +396,10 @@ namespace application::file::game::phive
 				application::util::FileUtil::WriteFile(application::util::FileUtil::GetWorkingDirFilePath("Original.bphsh"), OtherWriter.GetData());
 				*/
 
-				std::vector<unsigned char> Binary = mExternalBphshMeshes[i].mPhiveShape.ToBinary();
+				std::vector<unsigned char> Binary = BuildEmbeddedBphshBytes(
+					mExternalBphshMeshes[i].mPhiveShape,
+					mExternalBphshMeshes[i].mReserve0Array,
+					mExternalBphshMeshes[i].mReserve1Array);
 				Writer.WriteRawUnsafeFixed(reinterpret_cast<const char*>(Binary.data()), Binary.size());
 				Writer.Align(16);
 

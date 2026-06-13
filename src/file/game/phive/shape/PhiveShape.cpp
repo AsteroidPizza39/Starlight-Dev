@@ -311,7 +311,7 @@ namespace application::file::game::phive::shape
 		}
 	}
 
-	void PhiveShape::InjectModel(GeneratorData& GeneratorData)
+	bool PhiveShape::InjectModel(GeneratorData& GeneratorData)
 	{
 		mMaterials = GeneratorData.mMaterials;
 
@@ -323,6 +323,12 @@ namespace application::file::game::phive::shape
 		{
 			RunMeshOptimizer(GeneratorData); //Run the mesh optimizer
 			RemoveDuplicateVertices(GeneratorData); //This is done to remove unreferenced and thus unnecessary vertices
+		}
+
+		if (GeneratorData.mVertices.empty() || GeneratorData.mIndices.empty())
+		{
+			application::util::Logger::Warning("PhiveShape::InjectModel", "Skipping collision injection: empty geometry");
+			return false;
 		}
 
 		application::util::Logger::Info("PhiveShape::InjectModel", "Constructing internal geometry...");
@@ -350,8 +356,13 @@ namespace application::file::game::phive::shape
 		starlight_physics::shape::hknpMeshShapeBuilder Builder;
 
 		application::util::Logger::Info("PhiveShape::InjectModel", "Starting collision mesh generation");
-		Builder.compile(&mTagFile.mRootClass, Geometry);
+		if (!Builder.compile(&mTagFile.mRootClass, Geometry))
+		{
+			application::util::Logger::Error("PhiveShape::InjectModel", "Collision mesh generation failed");
+			return false;
+		}
 		application::util::Logger::Info("PhiveShape::InjectModel", "Collision generation completed");
+		return true;
 
 		//application::file::game::phive::shape::PhiveShapeUtil::GeometryUtil::ApplyGeometryOptimizer(GeneratorData);
 

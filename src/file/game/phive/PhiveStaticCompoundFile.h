@@ -301,6 +301,11 @@ namespace application::file::game::phive
 
 		bool mReserializeCollision = false;
 
+		static std::vector<unsigned char> BuildEmbeddedBphshBytes(
+			application::file::game::phive::shape::PhiveShape& Shape,
+			const std::vector<uint64_t>& Reserve0,
+			const std::vector<uint8_t>& Reserve1);
+
 		std::vector<unsigned char> ToBinary();
 		void WriteToFile(const std::string& Path);
 

@@ -17,6 +17,7 @@
 #include <sstream>
 #include <unordered_set>
 #include <tool/scene/static_compound/StaticCompoundImplementationFieldScene.h>
+#include <file/game/phive/PhiveStaticCompoundFile.h>
 #include <meshoptimizer.h>
 #include <cmath>
 #include <limits>
@@ -896,6 +897,10 @@ namespace application::gl
         constexpr float ERROR_THRESHOLD = 0.1f;
         // Auto-creating LOD ResAreas writes new tscb entries and archive keys the game cannot load yet.
         constexpr bool kEnableAutoLodResAreaCreation = false;
+        // Experimental: export regenerated terrain collision into bphsc for in-game testing.
+        constexpr bool kEnableCollisionExport = true;
+        constexpr float kMaxCollisionExportSizeRatio = 8.0f;
+        constexpr size_t kMaxCollisionIndexCount = 24000;
 
         //Applying mate edits
         for (int x = 0; x < 16; x++)
@@ -1413,8 +1418,10 @@ namespace application::gl
                             bboxMax = glm::max(bboxMax, vertex);
                         }
                         const float bboxDiagonal = glm::length(bboxMax - bboxMin);
-                        const float target_error = bboxDiagonal * 0.01f;
-                        const size_t target_index_count = std::max(ModelIndicesFlat.size() / 2, static_cast<size_t>(6));
+                        const float target_error = bboxDiagonal * 0.02f;
+                        const size_t target_index_count = std::min(
+                            std::max(ModelIndicesFlat.size() / 2, static_cast<size_t>(6)),
+                            kMaxCollisionIndexCount);
 
                         std::vector<uint32_t> SimplifiedIndices(ModelIndicesFlat.size());
                         const size_t simplified_count = meshopt_simplify(
@@ -1462,17 +1469,47 @@ namespace application::gl
                         continue;
                     }
 
-                    application::file::game::phive::shape::PhiveShape& PhiveShape =
-                        Compound->mExternalBphshMeshes[0].mPhiveShape;
+                    application::file::game::phive::PhiveStaticCompoundFile::PhiveStaticCompoundBphsh& BphshMesh =
+                        Compound->mExternalBphshMeshes[0];
+                    application::file::game::phive::shape::PhiveShape& PhiveShape = BphshMesh.mPhiveShape;
+                    const uint32_t VanillaEmbeddedSize = BphshMesh.mFileSize;
 
-                    PhiveShape.InjectModel(Generator);
+                    if (!PhiveShape.InjectModel(Generator))
+                    {
+                        application::util::Logger::Warning("TerrainRenderer",
+                            "Skipping collision export for compound (%d, %d): mesh generation failed",
+                            CompoundX, CompoundY);
+                        continue;
+                    }
 
-                    // Injected Havok collision is for in-editor preview only. Reserialized bphsc
-                    // output is not yet game-compatible (wrong tag metadata, ~10x larger than vanilla)
-                    // and causes Ryujinx/TOTK to crash in ModuleSystemWorker when loading the mod.
+                    const std::vector<unsigned char> EmbeddedBytes =
+                        application::file::game::phive::PhiveStaticCompoundFile::BuildEmbeddedBphshBytes(
+                            PhiveShape, BphshMesh.mReserve0Array, BphshMesh.mReserve1Array);
+                    const float SizeRatio = static_cast<float>(EmbeddedBytes.size())
+                        / static_cast<float>(std::max(VanillaEmbeddedSize, 1u));
+
+                    if (!kEnableCollisionExport)
+                    {
+                        application::util::Logger::Info("TerrainRenderer",
+                            "Updated in-editor collision for compound (%d, %d); export disabled",
+                            CompoundX, CompoundY);
+                        continue;
+                    }
+
+                    if (SizeRatio > kMaxCollisionExportSizeRatio)
+                    {
+                        application::util::Logger::Warning("TerrainRenderer",
+                            "Skipping collision export for compound (%d, %d): embedded size %zu vs vanilla %u (ratio %.2f > %.2f)",
+                            CompoundX, CompoundY, EmbeddedBytes.size(), VanillaEmbeddedSize,
+                            SizeRatio, kMaxCollisionExportSizeRatio);
+                        continue;
+                    }
+
+                    BphshMesh.mReserializeCollision = true;
+                    FieldSceneImplCast->mModified[CompoundX + CompoundY * 4] = true;
                     application::util::Logger::Info("TerrainRenderer",
-                        "Updated in-editor collision for compound (%d, %d); bphsc export skipped",
-                        CompoundX, CompoundY);
+                        "Exported collision for compound (%d, %d): embedded size %zu (vanilla %u, ratio %.2f)",
+                        CompoundX, CompoundY, EmbeddedBytes.size(), VanillaEmbeddedSize, SizeRatio);
                 }
             }
         }

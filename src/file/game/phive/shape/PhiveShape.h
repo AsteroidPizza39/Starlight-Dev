@@ -49,7 +49,7 @@ namespace application::file::game::phive::shape
 
 		std::vector<float> ToVertices();
 		std::vector<unsigned int> ToIndices();
-		void InjectModel(GeneratorData& GeneratorData);
+		bool InjectModel(GeneratorData& GeneratorData);
 
 		PhiveShape(const std::vector<unsigned char>& Bytes);
 		PhiveShape() = default;

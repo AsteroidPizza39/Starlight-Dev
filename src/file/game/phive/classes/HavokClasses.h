@@ -1732,7 +1732,7 @@ namespace application::file::game::phive::classes
                 std::swap(mData[index1], mData[index2]);
             }
 
-            void ConfigureAsLeafOrInternal(bool targetStateAsLeaf)
+            bool ConfigureAsLeafOrInternal(bool targetStateAsLeaf)
             {
                 if (IsLeaf() != targetStateAsLeaf)
                 {
@@ -1758,8 +1758,16 @@ namespace application::file::game::phive::classes
                     }
                     else
                     {
-                        assert(targetStateAsLeaf);
-                        mData[2].mParent = 1;
+                        if (targetStateAsLeaf)
+                        {
+                            mData[2].mParent = 1;
+                        }
+                        else
+                        {
+                            // Internal node compacted to fewer than three children.
+                            mData[2].mParent = 0;
+                            mData[3].mParent = 1;
+                        }
                     }
                 }
 
@@ -1768,20 +1776,20 @@ namespace application::file::game::phive::classes
                     const int8_t* hx = reinterpret_cast<const int8_t*>(&mParent.mHx);
 					int8_t hxValues[4] = { hx[0], hx[1], hx[2], hx[3] };
 
-                    bool a = IsChildValid(0);
-                    bool b = IsChildValid(1);
-                    bool c = IsChildValid(2);
-                    bool d = IsChildValid(3);
-
                     application::util::Logger::Error("HavokClasses", "Could not set leaf state correctly, %u %u %u %u", hxValues[0], hxValues[1], hxValues[2], hxValues[3]);
+                    return false;
                 }
 
-                assert(IsLeaf() == targetStateAsLeaf);
+                return true;
             }
 
-            void CompactChildren(bool targetStateAsLeaf)
+            bool CompactChildren(bool targetStateAsLeaf)
             {
-                assert(!IsEmpty() && "hknpAabb8TreeNode was empty");
+                if (IsEmpty())
+                {
+                    application::util::Logger::Error("HavokClasses", "hknpAabb8TreeNode was empty");
+                    return false;
+                }
 
                 int j = 0;
                 for (int i = 0; i < 4; i++)
@@ -1803,7 +1811,7 @@ namespace application::file::game::phive::classes
                     mData[i].mParent = 0;
                 }
 
-                ConfigureAsLeafOrInternal(targetStateAsLeaf);
+                return ConfigureAsLeafOrInternal(targetStateAsLeaf);
             }
 
             virtual std::string GetHavokClassName() override
