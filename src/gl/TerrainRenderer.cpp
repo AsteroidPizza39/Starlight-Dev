@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <map>
 #include <sstream>
+#include <unordered_set>
 #include <tool/scene/static_compound/StaticCompoundImplementationFieldScene.h>
 #include <meshoptimizer.h>
 #include <cmath>
@@ -352,7 +353,7 @@ namespace application::gl
                     continue;
                 }
 
-                application::manager::TerrainMgr::TerrainScene::ArchivePack* ArchivePack = application::manager::TerrainMgr::GetArchivePack(TileArea->mFilenameOffset.mResString.mString, *TerrainScene);
+                application::manager::TerrainMgr::TerrainScene::ArchivePack* ArchivePack = application::manager::TerrainMgr::GetArchivePack(TileArea->mFilenameOffset.mResString.mString, *TerrainScene, mSceneName);
 
                 if(ArchivePack == nullptr)
                 {
@@ -867,7 +868,7 @@ namespace application::gl
 
     void TerrainRenderer::Save(void* FieldSceneImpl)
     {
-        if (mSceneName.empty() || mSectionName.empty()) 
+        if (mSceneName.empty() || mSectionName.empty())
         {
             application::util::Logger::Error("TerrainRenderer", "Cannot save: SceneName or SectionName not set");
             return;
@@ -886,9 +887,15 @@ namespace application::gl
         std::vector<application::file::game::terrain::TerrainSceneFile::ResArea*> Tiles =
             TerrainScene->mTerrainSceneFile.GetSectionTilesByPos(32.0f, SectionMidPoint, 1000.0f);
 
+        const auto RefreshSectionTiles = [&]() {
+            Tiles = TerrainScene->mTerrainSceneFile.GetSectionTilesByPos(32.0f, SectionMidPoint, 1000.0f);
+        };
+
         constexpr float BaseTileWidth = kSectionWidthWorld / static_cast<float>(kSectionTileCount);
 
         constexpr float ERROR_THRESHOLD = 0.1f;
+        // Auto-creating LOD ResAreas writes new tscb entries and archive keys the game cannot load yet.
+        constexpr bool kEnableAutoLodResAreaCreation = false;
 
         //Applying mate edits
         for (int x = 0; x < 16; x++)
@@ -921,7 +928,7 @@ namespace application::gl
                         {
                             // Get the archive pack for this tile
                             application::manager::TerrainMgr::TerrainScene::ArchivePack* ArchivePack =
-                                application::manager::TerrainMgr::GetArchivePack(Area->mFilenameOffset.mResString.mString, *TerrainScene);
+                                application::manager::TerrainMgr::GetArchivePack(Area->mFilenameOffset.mResString.mString, *TerrainScene, mSceneName);
 
                             if (ArchivePack == nullptr) {
                                 application::util::Logger::Error("TerrainRenderer", "Failed to get archive pack for saving tile: %s",
@@ -996,12 +1003,16 @@ namespace application::gl
         }
 
         // 1st iteration, calculating the required LOD per tile
+        if constexpr (kEnableAutoLodResAreaCreation)
+        {
         for (int x = 0; x < 16; x++)
         {
             for (int y = 0; y < 16; y++)
             {
                 if (!mModifiedTiles.contains(x + y * 16))
                     continue;
+
+                RefreshSectionTiles();
 
                 const glm::vec2 TilePos = SectionStartPoint + glm::vec2(x * BaseTileWidth, y * BaseTileWidth) + glm::vec2(0.5f * BaseTileWidth, 0.5f * BaseTileWidth);
                 application::file::game::terrain::TerrainSceneFile::ResArea* TileArea = nullptr;
@@ -1086,11 +1097,11 @@ namespace application::gl
                                 NewArea.mX = RequiredAreaPos.x / (1000.0f * 0.5f);
                                 NewArea.mZ = RequiredAreaPos.y / (1000.0f * 0.5f);
 
-                                NewArea.mFilenameOffset.mResString.mString = application::manager::TerrainMgr::GenerateHghtNameForArea(TerrainScene, &NewArea); //Using an existing HGHT for now instead of creating a new one
+                                NewArea.mFilenameOffset.mResString.mString =
+                                    application::manager::TerrainMgr::GenerateHghtNameForArea(TerrainScene, &NewArea);
                                 NewArea.mFileCount = 3;
-                                NewArea._40 = 1; //No idea what that is, but most areas have it set to 1 (dt said a visibility flag, thanks dt <3)
+                                NewArea._40 = 1;
 
-                                //Creating the file resources
                                 application::file::game::terrain::TerrainSceneFile::ResFile HeightMapFile;
                                 HeightMapFile.mType = application::file::game::terrain::TerrainSceneFile::ResFileType::HeightMap;
 
@@ -1100,64 +1111,60 @@ namespace application::gl
                                 application::file::game::terrain::TerrainSceneFile::ResFile MaterialMapFile;
                                 MaterialMapFile.mType = application::file::game::terrain::TerrainSceneFile::ResFileType::Material;
 
-	                                //Generating the files (hght & mate)
-	                                {
-	                                    application::file::game::terrain::HghtFile CopyHght;
-	                                    application::file::game::terrain::MateFile CopyMate;
-	                                    CopyHght.mWidth = kAreaGridResolution;
-	                                    CopyHght.mHeight = kAreaGridResolution;
-	                                    CopyHght.mHeightMap.resize(CopyHght.mWidth * CopyHght.mHeight);
+                                application::file::game::terrain::HghtFile CopyHght;
+                                application::file::game::terrain::MateFile CopyMate;
+                                CopyHght.mWidth = kAreaGridResolution;
+                                CopyHght.mHeight = kAreaGridResolution;
+                                CopyHght.mHeightMap.resize(CopyHght.mWidth * CopyHght.mHeight);
 
-	                                    CopyMate.mWidth = kAreaGridResolution;
-	                                    CopyMate.mHeight = kAreaGridResolution;
-	                                    CopyMate.mMaterials.resize(CopyMate.mWidth * CopyMate.mHeight);
+                                CopyMate.mWidth = kAreaGridResolution;
+                                CopyMate.mHeight = kAreaGridResolution;
+                                CopyMate.mMaterials.resize(CopyMate.mWidth * CopyMate.mHeight);
 
-	                                    const float newAreaWidth = BaseTileWidth * (requiredScale / kBaseLodScale);
-	                                    const glm::vec2 newAreaStartPos = RequiredAreaPos - glm::vec2(0.5f * newAreaWidth, 0.5f * newAreaWidth);
+                                const float newAreaWidth = BaseTileWidth * (requiredScale / kBaseLodScale);
+                                const glm::vec2 newAreaStartPos = RequiredAreaPos - glm::vec2(0.5f * newAreaWidth, 0.5f * newAreaWidth);
 
-	                                    for (int gridY = 0; gridY < kAreaGridResolution; ++gridY)
-	                                    {
-	                                        for (int gridX = 0; gridX < kAreaGridResolution; ++gridX)
-	                                        {
-	                                            const float worldX = newAreaStartPos.x + ((static_cast<float>(gridX) - 2.0f) / static_cast<float>(kTileResolution)) * newAreaWidth;
-	                                            const float worldY = newAreaStartPos.y + ((static_cast<float>(gridY) - 2.0f) / static_cast<float>(kTileResolution)) * newAreaWidth;
+                                for (int gridY = 0; gridY < kAreaGridResolution; ++gridY)
+                                {
+                                    for (int gridX = 0; gridX < kAreaGridResolution; ++gridX)
+                                    {
+                                        const float worldX = newAreaStartPos.x + ((static_cast<float>(gridX) - 2.0f) / static_cast<float>(kTileResolution)) * newAreaWidth;
+                                        const float worldY = newAreaStartPos.y + ((static_cast<float>(gridY) - 2.0f) / static_cast<float>(kTileResolution)) * newAreaWidth;
 
-	                                            const float texX = ((worldX - SectionStartPoint.x) / kSectionWidthWorld) * static_cast<float>(kTerrainTextureSize);
-	                                            const float texY = ((worldY - SectionStartPoint.y) / kSectionWidthWorld) * static_cast<float>(kTerrainTextureSize);
+                                        const float texX = ((worldX - SectionStartPoint.x) / kSectionWidthWorld) * static_cast<float>(kTerrainTextureSize);
+                                        const float texY = ((worldY - SectionStartPoint.y) / kSectionWidthWorld) * static_cast<float>(kTerrainTextureSize);
 
-	                                            const float sampledHeight = BilinearSampleHeight(mHeightTextureData, kTerrainTextureSize, texX, texY);
-	                                            int heightValue = 0;
-	                                            if (mHeightScale > std::numeric_limits<float>::epsilon())
-	                                            {
-	                                                heightValue = static_cast<int>(std::lround(sampledHeight / mHeightScale));
-	                                            }
-	                                            heightValue = std::clamp(heightValue, 0, 0xFFFF);
+                                        const float sampledHeight = BilinearSampleHeight(mHeightTextureData, kTerrainTextureSize, texX, texY);
+                                        int heightValue = 0;
+                                        if (mHeightScale > std::numeric_limits<float>::epsilon())
+                                        {
+                                            heightValue = static_cast<int>(std::lround(sampledHeight / mHeightScale));
+                                        }
+                                        heightValue = std::clamp(heightValue, 0, 0xFFFF);
 
-	                                            const size_t Index = static_cast<size_t>(gridX) + static_cast<size_t>(CopyHght.GetWidth()) * static_cast<size_t>(gridY);
-	                                            CopyHght.mHeightMap[Index] = static_cast<uint16_t>(heightValue);
-	                                            CopyMate.mMaterials[Index] = SampleNearestMaterial(mLayersTextureData, kTerrainTextureSize, texX, texY);
-	                                        }
-	                                    }
-
-	                                    CopyHght.mModified = true;
-	                                    CopyMate.mModified = true;
-
-                                    std::string Name = NewArea.mFilenameOffset.mResString.mString;
-                                    const uint64_t NameInt = std::floor(std::stoull(Name, nullptr, 16) / 4) * 4;
-
-                                    std::stringstream Stream;
-                                    Stream << std::setfill('0') << std::setw(16) << std::uppercase
-                                        << std::hex << NameInt;
-                                    Name = Stream.str();
-                                    Name = Name.substr(Name.length() - 9);
-
-                                    TerrainScene->mArchives[Name].mHghtArchive.mHeightMaps[NewArea.mFilenameOffset.mResString.mString] = CopyHght;
-                                    TerrainScene->mArchives[Name].mMateArchive.mMateFiles[NewArea.mFilenameOffset.mResString.mString] = CopyMate;
+                                        const size_t Index = static_cast<size_t>(gridX) + static_cast<size_t>(CopyHght.GetWidth()) * static_cast<size_t>(gridY);
+                                        CopyHght.mHeightMap[Index] = static_cast<uint16_t>(heightValue);
+                                        CopyMate.mMaterials[Index] = SampleNearestMaterial(mLayersTextureData, kTerrainTextureSize, texX, texY);
+                                    }
                                 }
 
-                                //Calculating the min and max values of the HGHT and setting it in the height map resource
-                                application::manager::TerrainMgr::TerrainScene::ArchivePack* ArchivePack = application::manager::TerrainMgr::GetArchivePack(NewArea.mFilenameOffset.mResString.mString, *TerrainScene);
-                                application::file::game::terrain::HghtFile& Hght = ArchivePack->mHghtArchive.mHeightMaps[NewArea.mFilenameOffset.mResString.mString];
+                                CopyHght.mModified = true;
+                                CopyMate.mModified = true;
+
+                                application::manager::TerrainMgr::TerrainScene::ArchivePack* NewAreaArchivePack =
+                                    application::manager::TerrainMgr::GetArchivePack(NewArea.mFilenameOffset.mResString.mString, *TerrainScene, mSceneName);
+                                if (NewAreaArchivePack == nullptr)
+                                {
+                                    application::util::Logger::Error("TerrainRenderer",
+                                        "Failed to get archive pack for new ResArea at tile (%d, %d)", x, y);
+                                    continue;
+                                }
+
+                                NewAreaArchivePack->mHghtArchive.mHeightMaps[NewArea.mFilenameOffset.mResString.mString] = std::move(CopyHght);
+                                NewAreaArchivePack->mMateArchive.mMateFiles[NewArea.mFilenameOffset.mResString.mString] = std::move(CopyMate);
+
+                                application::file::game::terrain::HghtFile& Hght =
+                                    NewAreaArchivePack->mHghtArchive.mHeightMaps[NewArea.mFilenameOffset.mResString.mString];
 
                                 uint16_t Min = 0xFFFF;
                                 uint16_t Max = 0x0000;
@@ -1170,7 +1177,6 @@ namespace application::gl
                                 HeightMapFile.mMinHeight = Min / 65535.0f;
                                 HeightMapFile.mMaxHeight = Max / 65535.0f;
 
-                                //Creating the file resource pointers
                                 application::file::game::terrain::TerrainSceneFile::RelPtr<application::file::game::terrain::TerrainSceneFile::ResFile> HeightMapFilePtr;
                                 HeightMapFilePtr.mObj = HeightMapFile;
 
@@ -1180,24 +1186,19 @@ namespace application::gl
                                 application::file::game::terrain::TerrainSceneFile::RelPtr<application::file::game::terrain::TerrainSceneFile::ResFile> MaterialMapFilePtr;
                                 MaterialMapFilePtr.mObj = MaterialMapFile;
 
-                                //Adding the file resources
                                 NewArea.mFileResources.push_back(HeightMapFilePtr);
                                 NewArea.mFileResources.push_back(NormalMapFilePtr);
                                 NewArea.mFileResources.push_back(MaterialMapFilePtr);
 
-
-                                //Creating the new area pointer
                                 application::file::game::terrain::TerrainSceneFile::RelPtr<application::file::game::terrain::TerrainSceneFile::ResArea> NewAreaPtr;
                                 NewAreaPtr.mObj = NewArea;
 
-                                //Adding the new area pointer to the TSCB
                                 TerrainScene->mTerrainSceneFile.mTerrainScene.mAreas.push_back(NewAreaPtr);
                                 TerrainScene->mTerrainSceneFile.mTerrainScene.mAreaCount += 1;
                                 TerrainScene->mTerrainSceneFile.mModified = true;
 
-								ParentArea = &TerrainScene->mTerrainSceneFile.mTerrainScene.mAreas.back().mObj;
-
-                                Tiles = TerrainScene->mTerrainSceneFile.GetSectionTilesByPos(32.0f, SectionMidPoint, 1000.0f);
+                                ParentArea = &TerrainScene->mTerrainSceneFile.mTerrainScene.mAreas.back().mObj;
+                                RefreshSectionTiles();
 
                                 application::util::Logger::Info("TerrainRenderer",
                                     "Tile (%d, %d) requires new ResArea (Scale: %.3f, Error: %.2f)",
@@ -1210,6 +1211,14 @@ namespace application::gl
 				std::cout << "Tile (" << x << ", " << y << ") - Max Error: " << maxTileError << std::endl;
             }
         }
+        }
+        else if (!mModifiedTiles.empty())
+        {
+            application::util::Logger::Info("TerrainRenderer",
+                "LOD ResArea auto-creation disabled; height edits apply to existing ResAreas only");
+        }
+
+        RefreshSectionTiles();
 
 		//2nd iteration, applying height data to all tiles in the section
         for (int x = 0; x < 16; x++)
@@ -1242,7 +1251,7 @@ namespace application::gl
                         {
                             // Get the archive pack for this tile
                             application::manager::TerrainMgr::TerrainScene::ArchivePack* ArchivePack =
-                                application::manager::TerrainMgr::GetArchivePack(Area->mFilenameOffset.mResString.mString, *TerrainScene);
+                                application::manager::TerrainMgr::GetArchivePack(Area->mFilenameOffset.mResString.mString, *TerrainScene, mSceneName);
 
                             if (ArchivePack == nullptr) {
                                 application::util::Logger::Error("TerrainRenderer", "Failed to get archive pack for saving tile: %s",
@@ -1335,130 +1344,148 @@ namespace application::gl
             }
         }
 
-		std::unordered_set<int> ModifiedCompounds;
-		application::tool::scene::static_compound::StaticCompoundImplementationFieldScene* FieldSceneImplCast = static_cast<application::tool::scene::static_compound::StaticCompoundImplementationFieldScene*>(FieldSceneImpl);
+        std::unordered_set<int> ModifiedCompounds;
+        application::tool::scene::static_compound::StaticCompoundImplementationFieldScene* FieldSceneImplCast =
+            static_cast<application::tool::scene::static_compound::StaticCompoundImplementationFieldScene*>(FieldSceneImpl);
 
-		//3rd iteration, remaking collision for modified tiles
-        for (int x = 0; x < 16; x++)
+        // 3rd iteration, remaking collision for modified tiles
+        if (FieldSceneImplCast != nullptr)
         {
-            for (int y = 0; y < 16; y++)
+            for (int x = 0; x < 16; x++)
             {
-                if (!mModifiedTiles.contains(x + y * 16) && !mModifiedTextureTiles.contains(x + y * 16))
-                    continue;
-
-                // Calculate which 4x4 compound this tile belongs to
-                int CompoundX = x / 4;  // 0, 1, 2, 3 for x values 0-15
-                int CompoundY = y / 4;  // 0, 1, 2, 3 for y values 0-15
-
-                if (ModifiedCompounds.contains(CompoundX + CompoundY * 4))
-                    continue;
-
-                ModifiedCompounds.insert(CompoundX + CompoundY * 4);
-
-                glm::vec3 StartPoint = FieldSceneImplCast->GetStaticCompoundMiddlePoint(CompoundX, CompoundY);
-
-                application::file::game::phive::shape::PhiveShape::GeneratorData Generator;
-
-                std::pair<std::vector<glm::vec3>, std::vector<std::pair<std::tuple<uint32_t, uint32_t, uint32_t>, uint32_t>>> Model = GenerateTerrainTileCollisionModel(glm::vec2(StartPoint.x, StartPoint.z), &Generator.mMaterials);
-
-                std::unordered_map<uint32_t, std::vector<uint32_t>> Indices;
-                for (auto& [Face, Material] : Model.second)
+                for (int y = 0; y < 16; y++)
                 {
-                    Indices[Material].push_back(std::get<0>(Face));
-                    Indices[Material].push_back(std::get<1>(Face));
-                    Indices[Material].push_back(std::get<2>(Face));
-                }
+                    if (!mModifiedTiles.contains(x + y * 16) && !mModifiedTextureTiles.contains(x + y * 16))
+                        continue;
 
-                std::unordered_map<uint32_t, std::vector<uint32_t>> SimplifiedIndices;
-                for (auto& [Material, Faces] : Indices)
-                {
-                    float ResultError = 0.0f;
-                    SimplifiedIndices[Material].resize(Faces.size());
+                    const int CompoundX = x / 4;
+                    const int CompoundY = y / 4;
 
-                    size_t original_triangle_count = Faces.size() / 3;
+                    if (ModifiedCompounds.contains(CompoundX + CompoundY * 4))
+                        continue;
 
-                    // Don't simplify meshes that are already very simple (< 10 triangles)
-                    if (original_triangle_count < 10) 
+                    ModifiedCompounds.insert(CompoundX + CompoundY * 4);
+
+                    const glm::vec3 StartPoint = FieldSceneImplCast->GetStaticCompoundMiddlePoint(CompoundX, CompoundY);
+
+                    application::file::game::phive::shape::PhiveShape::GeneratorData Generator;
+                    std::pair<std::vector<glm::vec3>, std::vector<std::pair<std::tuple<uint32_t, uint32_t, uint32_t>, uint32_t>>> Model =
+                        GenerateTerrainTileCollisionModel(glm::vec2(StartPoint.x, StartPoint.z), &Generator.mMaterials);
+
+                    if (Model.first.empty() || Model.second.empty())
                     {
-                        SimplifiedIndices[Material] = Faces;
+                        application::util::Logger::Warning("TerrainRenderer",
+                            "Skipping collision regeneration for compound (%d, %d): empty collision mesh",
+                            CompoundX, CompoundY);
+                        continue;
                     }
-                    else 
-                    {
-                        // Target: reduce to ~50% of original triangles, but never below 6 indices (2 triangles)
-                        size_t target_index_count = std::max(Faces.size() / 2, static_cast<size_t>(6));
 
-                        // Use a reasonable error threshold (1% of bounding box diagonal)
+                    std::vector<uint32_t> ModelIndicesFlat;
+                    ModelIndicesFlat.reserve(Model.second.size() * 3);
+                    std::unordered_map<uint32_t, size_t> MaterialFrequency;
+                    for (auto& [Face, Material] : Model.second)
+                    {
+                        ModelIndicesFlat.push_back(std::get<0>(Face));
+                        ModelIndicesFlat.push_back(std::get<1>(Face));
+                        ModelIndicesFlat.push_back(std::get<2>(Face));
+                        MaterialFrequency[Material]++;
+                    }
+
+                    uint32_t DominantMaterial = 0;
+                    size_t DominantMaterialCount = 0;
+                    for (auto& [Material, Count] : MaterialFrequency)
+                    {
+                        if (Count > DominantMaterialCount)
+                        {
+                            DominantMaterial = Material;
+                            DominantMaterialCount = Count;
+                        }
+                    }
+
+                    if (ModelIndicesFlat.size() >= 30)
+                    {
+                        float ResultError = 0.0f;
                         glm::vec3 bboxMin = Model.first[0];
                         glm::vec3 bboxMax = Model.first[0];
-                        for (const auto& vertex : Model.first) {
+                        for (const auto& vertex : Model.first)
+                        {
                             bboxMin = glm::min(bboxMin, vertex);
                             bboxMax = glm::max(bboxMax, vertex);
                         }
-                        float bboxDiagonal = glm::length(bboxMax - bboxMin);
-                        float target_error = bboxDiagonal * 0.01f; // 1% of diagonal
+                        const float bboxDiagonal = glm::length(bboxMax - bboxMin);
+                        const float target_error = bboxDiagonal * 0.01f;
+                        const size_t target_index_count = std::max(ModelIndicesFlat.size() / 2, static_cast<size_t>(6));
 
-                        // Pre-allocate output buffer
-                        SimplifiedIndices[Material].resize(Faces.size());
-
-                        size_t simplified_count = meshopt_simplify(
-                            &SimplifiedIndices[Material][0],
-                            &Faces[0],
-                            Faces.size(),
+                        std::vector<uint32_t> SimplifiedIndices(ModelIndicesFlat.size());
+                        const size_t simplified_count = meshopt_simplify(
+                            SimplifiedIndices.data(),
+                            ModelIndicesFlat.data(),
+                            ModelIndicesFlat.size(),
                             &Model.first[0].x,
                             Model.first.size(),
                             sizeof(glm::vec3),
                             target_index_count,
                             target_error,
                             meshopt_SimplifyLockBorder,
-                            &ResultError
-                        );
+                            &ResultError);
 
-                        // Check if simplification failed or removed too much
-                        if (simplified_count < 6) 
+                        if (simplified_count >= 6)
                         {
-                            // Simplification was too aggressive or failed, keep original
-                            SimplifiedIndices[Material] = Faces;
-                        }
-                        else 
-                        {
-                            SimplifiedIndices[Material].resize(simplified_count);
+                            SimplifiedIndices.resize(simplified_count);
+                            Model.second.clear();
+                            for (size_t i = 0; i < SimplifiedIndices.size(); i += 3)
+                            {
+                                Model.second.push_back(std::make_pair(
+                                    std::make_tuple(SimplifiedIndices[i], SimplifiedIndices[i + 1], SimplifiedIndices[i + 2]),
+                                    DominantMaterial));
+                            }
+
+                            application::util::Logger::Info("TerrainRenderer",
+                                "Reduced collision mesh from %zu to %zu with error %f (%zu material groups unified to %u)",
+                                ModelIndicesFlat.size(), SimplifiedIndices.size(), ResultError,
+                                MaterialFrequency.size(), DominantMaterial);
                         }
                     }
 
-                    application::util::Logger::Info("TerrainMgr", "Reduced collision mesh from %u to %u with an error of %f", Faces.size(), SimplifiedIndices[Material].size(), ResultError);
-                }
+                    Generator.mVertices = Model.first;
+                    Generator.mIndices = Model.second;
+                    Generator.mRunMeshOptimizer = false;
 
-                Model.second.clear();
-                for (auto& [Material, Faces] : SimplifiedIndices)
-                {
-                    for (size_t i = 0; i < Faces.size(); i += 3)
+                    application::file::game::phive::PhiveStaticCompoundFile* Compound =
+                        FieldSceneImplCast->GetStaticCompoundAtIndex(CompoundX, CompoundY);
+
+                    if (Compound == nullptr || Compound->mExternalBphshMeshes.empty())
                     {
-                        Model.second.push_back(std::make_pair(std::make_tuple(Faces[i], Faces[i + 1], Faces[i + 2]), Material));
+                        application::util::Logger::Error("TerrainRenderer",
+                            "Skipping collision injection for compound (%d, %d): invalid static compound",
+                            CompoundX, CompoundY);
+                        continue;
                     }
+
+                    application::file::game::phive::shape::PhiveShape& PhiveShape =
+                        Compound->mExternalBphshMeshes[0].mPhiveShape;
+
+                    PhiveShape.InjectModel(Generator);
+
+                    // Injected Havok collision is for in-editor preview only. Reserialized bphsc
+                    // output is not yet game-compatible (wrong tag metadata, ~10x larger than vanilla)
+                    // and causes Ryujinx/TOTK to crash in ModuleSystemWorker when loading the mod.
+                    application::util::Logger::Info("TerrainRenderer",
+                        "Updated in-editor collision for compound (%d, %d); bphsc export skipped",
+                        CompoundX, CompoundY);
                 }
-
-                Generator.mVertices = Model.first;
-                Generator.mIndices = Model.second;
-
-                Generator.mRunMeshOptimizer = false;
-
-                application::file::game::phive::PhiveStaticCompoundFile* Compound = FieldSceneImplCast->GetStaticCompoundAtIndex(CompoundX, CompoundY);
-
-                application::file::game::phive::shape::PhiveShape& PhiveShape = Compound->mExternalBphshMeshes[0].mPhiveShape;
-                Compound->mExternalBphshMeshes[0].mReserializeCollision = true;
-
-                //application::util::FileUtil::WriteFile(application::util::FileUtil::GetWorkingDirFilePath("TerrainMgrOriginalMesh.bphsh"), PhiveShape.ToBinary());
-                PhiveShape.InjectModel(Generator);
-                //application::util::FileUtil::WriteFile(application::util::FileUtil::GetWorkingDirFilePath("TerrainMgrNewMesh.bphsh"), PhiveShape.ToBinary());
-
-                FieldSceneImplCast->mModified[CompoundX + CompoundY * 4] = true;
             }
+        }
+        else if (!mModifiedTiles.empty() || !mModifiedTextureTiles.empty())
+        {
+            application::util::Logger::Warning("TerrainRenderer",
+                "Terrain edits present but no field static-compound implementation; collision not updated");
         }
 
         mModifiedTiles.clear();
         mModifiedTextureTiles.clear();
 
-        for(auto& [Name, ArchivePack] : TerrainScene->mArchives)
+        for(auto& [ArchiveName, ArchivePack] : TerrainScene->mArchives)
         {
             if(ArchivePack.mHghtArchive.mHeightMaps.empty())
                 continue;
@@ -1484,16 +1511,27 @@ namespace application::gl
                 }
             }
 
+            if (SaveHght || SaveMate)
+            {
+                if (!application::manager::TerrainMgr::PrepareArchivePackForSave(
+                    mSceneName, ArchiveName, ArchivePack, TerrainScene->mTerrainSceneFile))
+                {
+                    application::util::Logger::Error("TerrainRenderer",
+                        "Skipping save for archive %s due to prepare failure", ArchiveName.c_str());
+                    continue;
+                }
+            }
+
             if (SaveHght)
             {
                 std::filesystem::create_directories(application::util::FileUtil::GetSaveFilePath("TerrainArc/" + mSceneName));
-                application::util::FileUtil::WriteFile(application::util::FileUtil::GetSaveFilePath("TerrainArc/" + mSceneName + "/" + Name + ".hght.ta.zs"), application::file::game::ZStdBackend::Compress(ArchivePack.mHghtArchive.ToBinary(), application::file::game::ZStdBackend::Dictionary::None));
+                application::util::FileUtil::WriteFile(application::util::FileUtil::GetSaveFilePath("TerrainArc/" + mSceneName + "/" + ArchiveName + ".hght.ta.zs"), application::file::game::ZStdBackend::Compress(ArchivePack.mHghtArchive.ToBinary(), application::file::game::ZStdBackend::Dictionary::None));
             }
 
             if (SaveMate)
             {
                 std::filesystem::create_directories(application::util::FileUtil::GetSaveFilePath("TerrainArc/" + mSceneName));
-                application::util::FileUtil::WriteFile(application::util::FileUtil::GetSaveFilePath("TerrainArc/" + mSceneName + "/" + Name + ".mate.ta.zs"), application::file::game::ZStdBackend::Compress(ArchivePack.mMateArchive.ToBinary(), application::file::game::ZStdBackend::Dictionary::None));
+                application::util::FileUtil::WriteFile(application::util::FileUtil::GetSaveFilePath("TerrainArc/" + mSceneName + "/" + ArchiveName + ".mate.ta.zs"), application::file::game::ZStdBackend::Compress(ArchivePack.mMateArchive.ToBinary(), application::file::game::ZStdBackend::Dictionary::None));
             }
 		}
 
@@ -1504,7 +1542,10 @@ namespace application::gl
             TerrainScene->mTerrainSceneFile.mModified = false;
         }
 
-        FieldSceneImplCast->ReloadMeshes();
+        if (FieldSceneImplCast != nullptr)
+        {
+            FieldSceneImplCast->ReloadMeshes();
+        }
 
         application::util::Logger::Info("TerrainRenderer", "Terrain height data saved for section: %s", mSectionName.c_str());
     }

@@ -13,6 +13,13 @@
       "project": "CMakeLists.txt",
       "projectTarget": "Starlight.exe (src\\Starlight.exe)",
       "name": "Starlight.exe (src\\Starlight.exe)"
+    },
+    {
+      "type": "dll",
+      "exe": "",
+      "project": "CMakeLists.txt",
+      "projectTarget": "astcenc-native-shared_Debug.dll (lib\\astcenc-native-shared_Debug.dll)",
+      "name": "astcenc-native-shared_Debug.dll (lib\\astcenc-native-shared_Debug.dll)"
     }
   ]
 }

@@ -26,7 +26,9 @@ namespace application::manager
 		extern std::unordered_map<std::string, application::gl::TerrainRenderer> gTerrainRenderers;
 
 		TerrainScene* GetTerrainScene(const std::string& TerrainSceneName);
-		TerrainMgr::TerrainScene::ArchivePack* GetArchivePack(std::string Name, TerrainMgr::TerrainScene& Scene);
+		bool TryGetArchivePackKey(const std::string& HghtName, std::string& OutKey);
+		TerrainMgr::TerrainScene::ArchivePack* GetArchivePack(const std::string& Name, TerrainMgr::TerrainScene& Scene, const std::string& TerrainSceneName);
+		bool PrepareArchivePackForSave(const std::string& TerrainSceneName, const std::string& ArchiveKey, TerrainMgr::TerrainScene::ArchivePack& ArchivePack, application::file::game::terrain::TerrainSceneFile& SceneFile);
 		application::gl::TerrainRenderer* GetTerrainRenderer(const std::string& SceneName, const std::string& SectionName);
 		std::string GenerateHghtNameForArea(application::manager::TerrainMgr::TerrainScene* Scene, application::file::game::terrain::TerrainSceneFile::ResArea* Area);
 	}

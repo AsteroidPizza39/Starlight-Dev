@@ -766,7 +766,11 @@ namespace application::file::game::phive::starlight_physics::shape
                     if (!node.IsChildValid(ci)) continue;
                     const common::hkAabb fbox = computeFaceAabb(node.mData[ci].mParent, chunk, packer);
                     newDomain.IncludeAabb(fbox);
-                    assert(chunk.mSpatialBounds.Contains(fbox));
+                    if (!chunk.mSpatialBounds.Contains(fbox))
+                    {
+                        chunk.mSpatialBounds.IncludeAabb(fbox);
+                        conv = hknpMeshShapeConversionUtils::Aabb8(chunk.mSpatialBounds);
+                    }
                     const auto q = conv.convertAabb(fbox);
                     if (q != node.mParent.GetAabb(ci)) node.mParent.SetAabb(ci, q);
                 }
@@ -1236,15 +1240,20 @@ namespace application::file::game::phive::starlight_physics::shape
                 }
             };
 
-        // Helper: write raw float vertices and mark section as unquantized
+        // Helper: write raw float vertices and mark section as unquantized.
+        // Each hkUint8 slot only stores one byte in mParent so object vtables stay valid for serialization.
         auto writeRawVerts = [](
             classes::HavokClasses::hknpMeshShape__GeometrySection& sec,
             const MeshChunk& chunk)
             {
                 const int nv = (int)chunk.mRawVerts.size();
                 sec.mVertexBuffer.mElements.resize(nv * sizeof(float) * 3);
-                auto* buf = reinterpret_cast<glm::vec3*>(sec.mVertexBuffer.mElements.data());
-                std::copy(chunk.mRawVerts.begin(), chunk.mRawVerts.end(), buf);
+                for (int vi = 0; vi < nv; ++vi)
+                {
+                    const auto* bytes = reinterpret_cast<const uint8_t*>(&chunk.mRawVerts[vi]);
+                    for (int b = 0; b < static_cast<int>(sizeof(glm::vec3)); ++b)
+                        sec.mVertexBuffer.mElements[vi * 12 + b].mParent = bytes[b];
+                }
                 for (int i = 0; i < 3; ++i)
                     sec.mSectionOffset[i].mParent = std::numeric_limits<uint32_t>::max();
             };
